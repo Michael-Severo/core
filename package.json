@@ -1,0 +1,23 @@
+{
+  "name": "core",
+  "version": "1.0.0",
+  "description": "TSMIS Core Runtime",
+  "main": "N/A",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Michael-Severo/Core"
+  },
+  "author": "Michael Severo",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Michael-Severo/Core/issues"
+  },
+  "homepage": "N/A",
+  "devDependencies": {
+    "directory-tree-ascii": "^1.0.10"
+  },
+  "type": "module"
+}
