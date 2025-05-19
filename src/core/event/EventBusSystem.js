@@ -1,472 +1,390 @@
-// src/core/event/EventBusSystem.js
+/**
+ * @file EventBusSystem.js
+ * @description Manages the CoreEventBus and provides system-level eventing capabilities.
+ */
 
 import { EventEmitter } from 'events';
-import { CoreEventBus } from './EventBus.js';
-import { CoreError, EventError, ErrorCodes, ServiceError } from '../errors/index.js';
+import { CoreEventBus } from './CoreEventBus.js';
+import { EventError } from '../errors/index.js'; // Assuming errors/index.js exports EventError
+import { ErrorCodes } from '../errors/ErrorCodes.js';
+import { SYSTEM_STATUS, LIFECYCLE_EVENTS, DEFAULT_CONFIG } from '../common/SystemConstants.js';
+import { safeHandleError, createStandardHealthCheckResult } from '../common/ErrorUtils.js';
 
 export class EventBusSystem extends EventEmitter {
-  static dependencies = ['errorSystem', 'config'];
-  static version = '1.0.0';
+  static dependencies = ['errorSystem', 'config']; //
+  static version = '2.0.0'; // Example version bump
 
-  constructor(deps) {
+  /**
+   * Creates a new EventBusSystem instance.
+   * @param {object} [deps={}] - Dependencies for the EventBusSystem.
+   * @param {object} [deps.errorSystem] - The ErrorSystem instance.
+   * @param {object} [deps.config={}] - Configuration object.
+   */
+  constructor(deps = {}) { //
     super();
-    this.deps = deps;
-    this.eventBus = null;
-    this.initialized = false;
-    // Remove static flag and use an instance flag instead
-    this._forwardingInitialized = false;
-    
-    // Enhanced state tracking
+    this.deps = {
+      errorSystem: deps.errorSystem, // Will be validated in validateDependencies
+      config: deps.config || {},
+    };
+
+    this.eventBus = null; // Will be an instance of CoreEventBus
+    // this.initialized is now driven by this.state.status
+    this._forwardingInitialized = false; // Instance flag for event forwarding setup
+
     this.state = {
-      status: 'created',
+      status: SYSTEM_STATUS.CREATED,
       startTime: null,
-      errors: [],
+      errors: [], // For internal errors of EventBusSystem itself
       metrics: new Map(),
-      healthChecks: new Map()
-    };
-    
-    // Set up default health checks
-    this.setupDefaultHealthChecks();
+      healthChecks: new Map(),
+    }; //
+
+    this.validateDependencies(); // Validate early
+    this.setupDefaultHealthChecks(); //
   }
 
   /**
-   * Set up default health checks
+   * Validates that required dependencies are provided and are valid.
    * @private
    */
-  setupDefaultHealthChecks() {
-    // Register default health check for state
-    this.registerHealthCheck('state', async () => {
-      return {
-        status: this.initialized ? 'healthy' : 'unhealthy',
-        uptime: this.state.startTime ? Date.now() - this.state.startTime : 0,
-        errorCount: this.state.errors.length
-      };
-    });
-
-    // Register health check for eventBus if available
-    this.registerHealthCheck('eventBus', async () => {
-      if (!this.eventBus) {
-        return {
-          status: 'unhealthy',
-          reason: 'EventBus not initialized'
-        };
-      }
-      
-      try {
-        // Check eventBus health if it has a checkHealth method
-        if (typeof this.eventBus.checkHealth === 'function') {
-          return await this.eventBus.checkHealth();
-        } else {
-          return {
-            status: 'healthy',
-            details: 'EventBus instance exists but does not support health checks'
-          };
-        }
-      } catch (error) {
-        return {
-          status: 'error',
-          error: error.message
-        };
-      }
-    });
-  }
-
-  /**
-   * Register a health check function
-   * @param {string} name - Health check name
-   * @param {Function} checkFn - Health check function
-   */
-  registerHealthCheck(name, checkFn) {
-    if (typeof checkFn !== 'function') {
-      throw new EventError(
-        ErrorCodes.EVENT.INVALID_HANDLER,
-        `Health check ${name} must be a function`,
-        { checkName: name }
+  validateDependencies() { //
+    const missing = EventBusSystem.dependencies.filter(dep => !this.deps[dep]); //
+    if (missing.length > 0) { //
+      throw new EventError( // Use EventError for its own domain
+        ErrorCodes.EVENT.MISSING_DEPENDENCIES, //
+        `EventBusSystem: Missing required dependencies: ${missing.join(', ')}`, //
+        { missingDeps: missing } //
       );
     }
-    this.state.healthChecks.set(name, checkFn);
-  }
-
-  /**
-   * Perform health checks
-   * @returns {Object} Health check results
-   */
-  async checkHealth() {
-    const results = {};
-    let overallStatus = 'healthy';
-
-    for (const [name, checkFn] of this.state.healthChecks) {
-      try {
-        results[name] = await checkFn();
-        if (results[name].status !== 'healthy') {
-          overallStatus = 'unhealthy';
-        }
-      } catch (error) {
-        results[name] = {
-          status: 'error',
-          error: error.message
-        };
-        overallStatus = 'unhealthy';
-      }
+    if (this.deps.errorSystem && typeof this.deps.errorSystem.handleError !== 'function') { //
+      throw new EventError( //
+        ErrorCodes.EVENT.INVALID_DEPENDENCY, //
+        'EventBusSystem: ErrorSystem dependency is invalid (missing handleError method).', //
+        { dependency: 'errorSystem' } //
+      );
     }
-
-    return {
-      name: 'EventBusSystem',
-      version: EventBusSystem.version,
-      status: overallStatus,
-      timestamp: new Date().toISOString(),
-      checks: results
-    };
   }
 
   /**
-   * Record a metric
-   * @param {string} name - Metric name
-   * @param {*} value - Metric value
-   * @param {Object} tags - Metric tags
-   */
-  recordMetric(name, value, tags = {}) {
-    this.state.metrics.set(name, {
-      value,
-      timestamp: Date.now(),
-      tags
-    });
-  }
-
-  /**
-   * Get all recorded metrics
-   * @returns {Object} All metrics
-   */
-  getMetrics() {
-    const metrics = {};
-    
-    for (const [name, data] of this.state.metrics) {
-      metrics[name] = data;
-    }
-    
-    return metrics;
-  }
-
-  /**
-   * Get system status
-   * @returns {Object} System status
-   */
-  getStatus() {
-    return {
-      name: 'EventBusSystem',
-      version: EventBusSystem.version,
-      status: this.state.status,
-      uptime: this.state.startTime ? Date.now() - this.state.startTime : 0, 
-      initialized: this.initialized,
-      errorCount: this.state.errors.length,
-      timestamp: new Date().toISOString()
-    };
-  }
-
-  /**
-   * Validate dependencies
+   * Handles internal operational errors of the EventBusSystem.
    * @private
    */
-  validateDependencies() {
-    const missing = this.constructor.dependencies.filter(
-      dep => !this.deps[dep]
-    );
+  async _handleInternalError(error, context = {}) {
+    const errorToLog = !(error instanceof EventError)
+      ? new EventError(ErrorCodes.EVENT.INTERNAL_ERROR || 'INTERNAL_ERROR', error.message, context, { cause: error })
+      : error;
 
-    if (missing.length > 0) {
-      throw new EventError(
-        ErrorCodes.EVENT.MISSING_DEPENDENCIES,
-        `Missing required dependencies: ${missing.join(', ')}`,
-        { missingDeps: missing }
-      );
-    }
-
-    // Validate errorSystem if present
-    if (this.deps.errorSystem && typeof this.deps.errorSystem.handleError !== 'function') {
-      throw new EventError(
-        ErrorCodes.EVENT.INVALID_DEPENDENCY,
-        'ErrorSystem missing required method: handleError',
-        { dependency: 'errorSystem' }
-      );
-    }
-  }
-
-  /**
-   * Initialize the event bus system
-   * @returns {Promise<EventBusSystem>} - The initialized system
-   */
-  async initialize() {
-    if (this.initialized) {
-      throw new EventError(
-        ErrorCodes.EVENT.INITIALIZATION, 
-        'EventBusSystem is already initialized',
-        { state: this.state.status }
-      );
-    }
-
-    try {
-      // Validate dependencies
-      this.validateDependencies();
-      
-      // Update state
-      this.state.status = 'initializing';
-      this.state.startTime = Date.now();
-      
-      // Create and initialize event bus
-      this.eventBus = new CoreEventBus(this.deps);
-      
-      // Set up event forwarding from eventBus to system
-      this.setupEventForwarding();
-      
-      await this.eventBus.initialize();
-
-      this.initialized = true;
-      this.state.status = 'running';
-      
-      // Record metric
-      this.recordMetric('eventbussystem.initialized', 1);
-      
-      // Emit system initialized event
-      this.emit('system:initialized', {
-        timestamp: new Date().toISOString()
-      });
-      
-      return this;
-    } catch (error) {
-      // Update state
-      this.state.status = 'error';
-      
-      // Record error in state
-      this.state.errors.push({
-        timestamp: new Date().toISOString(),
-        error: error.message,
-        context: { phase: 'initialization' }
-      });
-      
-      // Record metric
-      this.recordMetric('eventbussystem.initialization.failed', 1, {
-        errorMessage: error.message
-      });
-      
-      await this.handleError(error);
-      
-      // Wrap the error
-      if (!(error instanceof EventError)) {
-        throw new EventError(
-          ErrorCodes.EVENT.INITIALIZATION,
-          'Failed to initialize EventBusSystem',
-          { originalError: error.message },
-          { cause: error }
-        );
-      }
-      
-      throw error;
-    }
-  }
-
-  /**
-   * Set up event forwarding from eventBus to system
-   * @private
-   */
-  setupEventForwarding() {
-    if (!this.eventBus) {
-      return;
-    }
-    
-    // Use instance property to prevent multiple setup
-    if (this._forwardingInitialized) {
-      return;
-    }
-    
-    this._forwardingInitialized = true;
-    
-    // Add direct listeners for test-specific events
-    this.eventBus.on('system:test', (event) => {
-      super.emit('system:test', event);
-    });
-    
-    this.eventBus.on('wildcard:test', (event) => {
-      super.emit('wildcard:test', event);
-    });
-    
-    // Listen for all events on the eventBus and forward them
-    this.eventBus.on('*', (event) => {
-      
-      // Only forward if it's an event object with a name
-      if (event && event.name) {        
-        // Forward non-system events to system level
-        if (!event.name.startsWith('system:')) {
-          super.emit(event.name, event);
-        }
-      } else {
-        // TODO: Need an error
-      }
-    });
-  }
-
-  /**
-   * Enhanced emit with forwarding to eventBus
-   * @param {string} eventName - Event name
-   * @param {...any} args - Event arguments
-   * @returns {boolean} - Whether the event had listeners
-   */
-  async emit(eventName, ...args) {
-    // Local EventEmitter emission (use super to avoid recursion)
-    const localEmitResult = super.emit(eventName, ...args);
-    
-    // Forward to eventBus if available and initialized
-    // Don't forward system events to avoid loops
-    if (this.initialized && this.eventBus && 
-        typeof this.eventBus.emit === 'function' && 
-        !eventName.startsWith('system:')) {
-      try {
-        await this.eventBus.emit(eventName, ...args);
-      } catch (error) {
-        await this.handleError(error, {
-          method: 'emit',
-          eventName,
-          args
-        });
-      }
-    }
-    
-    return localEmitResult;
-  }
-
-  /**
-   * Handle errors with proper context
-   * @param {Error} error - Error object
-   * @param {Object} context - Error context
-   * @returns {Promise<void>}
-   */
-  async handleError(error, context = {}) {
-    // Add error to state
-    this.state.errors.push({
-      timestamp: new Date().toISOString(),
-      error: error.message,
-      context: context || {}
-    });
-    
-    // Trim error history if needed
-    if (this.state.errors.length > 100) {
+    this.state.errors.push({ error: errorToLog, timestamp: new Date().toISOString(), context });
+    if (this.state.errors.length > (this.deps.config?.eventBusSystem?.maxErrorHistory || DEFAULT_CONFIG.MAX_ERROR_HISTORY)) {
       this.state.errors.shift();
     }
-    
-    // Record metric
-    this.recordMetric('eventbussystem.errors', 1, {
-      errorType: error.constructor.name,
-      errorCode: error.code
-    });
-    
-    // Forward to error system if available
-    if (this.deps.errorSystem) {
-      try {
-        await this.deps.errorSystem.handleError(error, {
-          source: 'EventBusSystem',
-          ...context
-        });
-      } catch (handlerError) {
-        // Special handling when error system fails
-        this.state.errors.push({
-          timestamp: new Date().toISOString(),
-          error: handlerError.message,
-          context: { phase: 'error-handling' }
-        });
-      }
-    }
+    this.recordMetric('eventbussystem.errors.internal', 1, { errorName: errorToLog.name, errorCode: errorToLog.code });
+    await safeHandleError(this.deps.errorSystem, errorToLog, { source: 'EventBusSystem', ...context });
   }
 
   /**
-   * Get the event bus instance
-   * @returns {CoreEventBus} Event bus instance
+   * Initializes the EventBusSystem and the underlying CoreEventBus.
+   * @returns {Promise<EventBusSystem>}
    */
-  getEventBus() {
-    if (!this.initialized) {
-      throw new EventError(
-        ErrorCodes.EVENT.NOT_INITIALIZED,
-        'EventBusSystem is not initialized',
-        { state: this.state.status }
-      );
+  async initialize() { //
+    if (this.state.status === SYSTEM_STATUS.RUNNING || this.state.status === SYSTEM_STATUS.INITIALIZING) {
+      const err = new EventError(ErrorCodes.EVENT.ALREADY_INITIALIZED, 'EventBusSystem is already initialized or initializing.'); //
+      await this._handleInternalError(err, { currentStatus: this.state.status }); //
+      return this;
     }
-    return this.eventBus;
-  }
 
-  /**
-   * Shutdown the event bus system
-   * @returns {Promise<EventBusSystem>} - This instance
-   */
-  async shutdown() {
-    if (!this.initialized) return this;
+    this.emit(LIFECYCLE_EVENTS.INITIALIZING, { system: 'EventBusSystem' });
+    this.state.status = SYSTEM_STATUS.INITIALIZING; //
+    this.state.startTime = Date.now(); //
 
     try {
-      this.state.status = 'shutting_down';
-      
-      // Record metric
-      this.recordMetric('eventbussystem.shutdown', 1);
-      
-      // Shutdown eventBus
-      if (this.eventBus) {
-        await this.eventBus.shutdown();
-      }
-      
-      this.initialized = false;
-      this.eventBus = null;
-      this.state.status = 'shutdown';
-      
-      // Emit system shutdown event
-      this.emit('system:shutdown', {
-        timestamp: new Date().toISOString()
-      });
-      
-      return this;
+      // Create and initialize the CoreEventBus instance
+      // Pass system dependencies to CoreEventBus
+      this.eventBus = new CoreEventBus({
+        errorSystem: this.deps.errorSystem,
+        config: this.deps.config, // Pass the whole config, CoreEventBus can pick what it needs
+      }); //
+      await this.eventBus.initialize(); //
+
+      this.setupEventForwarding(); //
+
+      this.state.status = SYSTEM_STATUS.RUNNING; //
+      this.recordMetric('eventbussystem.initialized.success', 1, { timestamp: Date.now() }); //
+      this.emit(LIFECYCLE_EVENTS.INITIALIZED, { system: 'EventBusSystem', timestamp: new Date().toISOString() }); //
+      this.emit(LIFECYCLE_EVENTS.RUNNING, { system: 'EventBusSystem', timestamp: new Date().toISOString() });
+
+
     } catch (error) {
-      this.state.status = 'error';
-      
-      // Record error in state
-      this.state.errors.push({
-        timestamp: new Date().toISOString(),
-        error: error.message,
-        context: { phase: 'shutdown' }
-      });
-      
-      // Record metric
-      this.recordMetric('eventbussystem.shutdown.failed', 1, {
-        errorMessage: error.message
-      });
-      
-      await this.handleError(error, { phase: 'shutdown' });
-      
-      // Wrap the error
-      if (!(error instanceof EventError)) {
-        throw new EventError(
-          ErrorCodes.EVENT.SHUTDOWN_FAILED,
-          'Failed to shutdown EventBusSystem',
-          { state: this.state.status },
-          { cause: error }
-        );
-      }
-      
-      throw error;
+      this.state.status = SYSTEM_STATUS.ERROR; //
+      this.recordMetric('eventbussystem.initialized.failure', 1, { error: error.code, timestamp: Date.now() }); //
+      await this._handleInternalError(error, { phase: 'initialization' }); //
+      throw error instanceof EventError ? error : new EventError( //
+        ErrorCodes.EVENT.INITIALIZATION_FAILED, //
+        'EventBusSystem failed to initialize.', //
+        { originalMessage: error.message }, //
+        { cause: error } //
+      );
     }
+    return this;
+  }
+
+  /**
+   * Sets up event forwarding from the CoreEventBus to this EventBusSystem.
+   * This allows listeners on EventBusSystem to receive events emitted on CoreEventBus.
+   * @private
+   */
+  setupEventForwarding() { //
+    if (!this.eventBus || this._forwardingInitialized) { //
+      return; //
+    }
+
+    // Listen for all events on the actual eventBus instance (* means all named events)
+    // As per CoreEventBus refactor, wildcard listeners receive the full event object.
+    this.eventBus.on('*', (event) => { // `event` here is the full event object
+      if (event && typeof event.name === 'string') { //
+        // Forward non-system events emitted on CoreEventBus to EventBusSystem's listeners
+        // This avoids loops if EventBusSystem itself emits a system event that CoreEventBus also handles.
+        // However, if system events from CoreEventBus (like 'system:initialized' from CoreEventBus)
+        // are desired on EventBusSystem, this logic needs adjustment or specific listeners.
+        // The original code had this `if (!event.name.startsWith('system:'))`
+        // For broader forwarding, we might remove this condition or make it configurable.
+        // For now, let's assume we want to forward most things for observability.
+        // We should be careful not to re-emit events that EventBusSystem itself emitted to CoreEventBus.
+        // The current `emit` on EventBusSystem forwards to `this.eventBus.emit` for non-system events.
+        // So, an event emitted by `EventBusSystem.emit('app.event', ...)` will go to `CoreEventBus`,
+        // which then might be caught by this '*' listener and re-emitted by `super.emit` on `EventBusSystem`.
+        // This can create a duplicate for listeners on EventBusSystem.
+
+        // To avoid this, only forward events that did not originate from EventBusSystem's own emit chain.
+        // This is tricky without adding more metadata.
+        // A simpler approach: system events from CoreEventBus are prefixed e.g. "coreEventBus:initialized"
+        // And events emitted by modules go through CoreEventBus directly.
+        // EventBusSystem is more of a manager and a point for very high-level system events.
+
+        // Let's simplify: EventBusSystem primarily manages CoreEventBus.
+        // Events it emits itself are for its own lifecycle.
+        // If other systems want to listen to ALL CoreEventBus events, they should getEventBus().on('*', ...).
+        // The forwarding here can be for specific system-level aggregation if needed.
+        // The original code for test events implies specific forwarding.
+        // For general events, it was `if (!event.name.startsWith('system:')) { super.emit(event.name, event); }`
+
+        // Re-evaluating: The main purpose of EventBusSystem is to provide *access* to the event bus.
+        // Its own EventEmitter capabilities are for its own lifecycle.
+        // Forwarding all CoreEventBus events to EventBusSystem listeners might be too noisy / confusing.
+        // Let's stick to specific lifecycle event forwarding from CoreEventBus if needed,
+        // or remove general '*' forwarding from CoreEventBus to EventBusSystem.
+        // The original code specifically forwarded non-system events.
+        // This might be useful if some older code listens on EventBusSystem instance directly.
+
+        // For now, let's keep the original intent of forwarding non-system events:
+        if (event.name && !event.name.startsWith('system:')) {
+             super.emit(event.name, event); // Forward the full event object to EventBusSystem's own listeners
+        }
+
+        // Forward specific system events from CoreEventBus if they need to be exposed by EventBusSystem
+        if (event.name === LIFECYCLE_EVENTS.INITIALIZED && event.system === 'CoreEventBus') {
+            super.emit('coreEventBus:initialized', event);
+        }
+        if (event.name === LIFECYCLE_EVENTS.SHUTDOWN && event.system === 'CoreEventBus') {
+            super.emit('coreEventBus:shutdown', event);
+        }
+
+      } else if (event) { // Check if event itself is the name (old wildcard behavior)
+        // This block is for compatibility if CoreEventBus wildcard emits (eventName, data)
+        // But our refactored CoreEventBus now emits (fullEventObject) for wildcard.
+        // So this block might become less relevant or need removal if CoreEventBus is strictly refactored.
+        // For now, logging if this path is hit.
+        this._handleInternalError(new EventError(ErrorCodes.EVENT.LEGACY_WILDCARD_FORWARD, "Legacy wildcard format received by EventBusSystem forwarder."), { eventArg: event });
+      }
+    });
+    this._forwardingInitialized = true; //
+  }
+
+  /**
+   * Emits an event.
+   * Primarily, this system manages CoreEventBus. Direct emission from EventBusSystem
+   * should be for its own lifecycle or specific system-level events.
+   * Application events should be emitted via the CoreEventBus instance.
+   * @param {string} eventName - Event name.
+   * @param {...any} args - Event arguments.
+   * @returns {Promise<boolean>}
+   */
+  async emit(eventName, ...args) { //
+    // Local emission for EventBusSystem's own lifecycle events
+    const localEmitResult = super.emit(eventName, ...args); //
+
+    // Forward to CoreEventBus ONLY if it's NOT a system lifecycle event from this EventBusSystem itself,
+    // to prevent loops with the wildcard forwarder.
+    // Application code should typically use getEventBus().emit().
+    if (this.eventBus && typeof this.eventBus.emit === 'function' &&
+        !eventName.startsWith('system:') && !eventName.startsWith('coreEventBus:')) { //
+      try {
+        // When EventBusSystem emits, it's likely emitting raw data, not a pre-formed event object.
+        // CoreEventBus.emit(eventName, data, options) will wrap it.
+        await this.eventBus.emit(eventName, ...args); //
+      } catch (error) {
+        // Handle errors from attempting to emit via CoreEventBus
+        await this._handleInternalError(error, { phase: 'emit-forward', eventName }); //
+        // Do not re-throw here, as local emit might have succeeded.
+        // The error from eventBus.emit would be an EventError.
+      }
+    }
+    return localEmitResult; //
+  }
+
+
+  getEventBus() { //
+    if (this.state.status !== SYSTEM_STATUS.RUNNING) { //
+      throw new EventError( //
+        ErrorCodes.EVENT.NOT_INITIALIZED, //
+        'EventBusSystem (or its CoreEventBus) is not initialized or not running.', //
+        { currentStatus: this.state.status } //
+      );
+    }
+    return this.eventBus; //
+  }
+
+  async shutdown() { //
+    if (this.state.status === SYSTEM_STATUS.SHUTDOWN || this.state.status === SYSTEM_STATUS.SHUTTING_DOWN) { //
+      return this; //
+    }
+    this.emit(LIFECYCLE_EVENTS.SHUTTING_DOWN, { system: 'EventBusSystem' });
+    this.state.status = SYSTEM_STATUS.SHUTTING_DOWN; //
+
+    try {
+      if (this.eventBus) { //
+        await this.eventBus.shutdown(); //
+      }
+      super.removeAllListeners(); // Clear EventBusSystem's own listeners
+
+      this.eventBus = null; //
+      this.state.status = SYSTEM_STATUS.SHUTDOWN; //
+      this.state.startTime = null;
+      this.recordMetric('eventbussystem.shutdown.success', 1, { timestamp: Date.now() }); //
+      // Log directly as listeners are removed
+      this.deps.logger?.info('[EventBusSystem] Shutdown complete.');
+
+    } catch (error) {
+      this.state.status = SYSTEM_STATUS.ERROR; //
+      this.recordMetric('eventbussystem.shutdown.failure', 1, { error: error.code, timestamp: Date.now() }); //
+      await this._handleInternalError(error, { phase: 'shutdown' }); //
+      throw error instanceof EventError ? error : new EventError( //
+        ErrorCodes.EVENT.SHUTDOWN_FAILED, //
+        'EventBusSystem failed to shutdown.', //
+        { originalMessage: error.message }, //
+        { cause: error } //
+      );
+    }
+    return this; //
+  }
+
+  // --- State, Health, Metrics ---
+  setupDefaultHealthChecks() { //
+    this.registerHealthCheck('eventbussystem.state', this.checkSystemState.bind(this)); //
+    this.registerHealthCheck('eventbussystem.corebus', this.checkCoreBusHealth.bind(this)); //
+  }
+
+  recordMetric(name, value, tags = {}) { //
+    this.state.metrics.set(name, { value, timestamp: Date.now(), tags }); //
+  }
+
+  getMetrics() { //
+    const metrics = {}; //
+    for (const [name, data] of this.state.metrics) { //
+      metrics[name] = data; //
+    }
+    // Optionally include metrics from CoreEventBus if desired
+    // if (this.eventBus && typeof this.eventBus.getMetrics === 'function') {
+    //   metrics.coreEventBus = this.eventBus.getMetrics();
+    // }
+    return metrics; //
+  }
+
+  registerHealthCheck(name, checkFn) { //
+    if (typeof checkFn !== 'function') {
+      const err = new EventError(ErrorCodes.EVENT.INVALID_HANDLER, `Health check '${name}' must be a function.`); //
+      this._handleInternalError(err); // Log, but rethrow
+      throw err;
+    }
+    this.state.healthChecks.set(name, checkFn); //
+  }
+
+  async checkHealth() { //
+    const results = {}; //
+    let overallStatus = SYSTEM_STATUS.HEALTHY; //
+
+    for (const [name, checkFn] of this.state.healthChecks) { //
+      try {
+        const checkResult = await checkFn(); // Expects { status, detail, errors }
+        results[name] = checkResult; //
+        if (checkResult.status !== SYSTEM_STATUS.HEALTHY) { //
+          overallStatus = (overallStatus === SYSTEM_STATUS.HEALTHY) ? SYSTEM_STATUS.DEGRADED : SYSTEM_STATUS.UNHEALTHY; //
+          if (checkResult.status === SYSTEM_STATUS.UNHEALTHY) overallStatus = SYSTEM_STATUS.UNHEALTHY; //
+        }
+      } catch (error) {
+        results[name] = createStandardHealthCheckResult(SYSTEM_STATUS.UNHEALTHY, { error: 'Health check threw an exception' }, [error]); //
+        overallStatus = SYSTEM_STATUS.UNHEALTHY; //
+      }
+    }
+    return { //
+      name: this.constructor.name, //
+      version: EventBusSystem.version, //
+      status: overallStatus, //
+      timestamp: new Date().toISOString(), //
+      uptime: this.state.startTime ? Date.now() - this.state.startTime : 0,
+      errorCount: this.state.errors.length,
+      checks: results, //
+    };
+  }
+
+  async checkSystemState() { //
+    return createStandardHealthCheckResult( //
+      this.state.status === SYSTEM_STATUS.RUNNING ? SYSTEM_STATUS.HEALTHY : SYSTEM_STATUS.UNHEALTHY, //
+      { //
+        status: this.state.status, //
+        uptime: this.state.startTime ? Date.now() - this.state.startTime : 0, //
+        internalErrorCount: this.state.errors.length //
+      }
+    );
+  }
+
+  async checkCoreBusHealth() { //
+    if (!this.eventBus || typeof this.eventBus.checkHealth !== 'function') { //
+      return createStandardHealthCheckResult( //
+        SYSTEM_STATUS.UNHEALTHY, //
+        { reason: 'CoreEventBus not available or does not support health checks.' } //
+      );
+    }
+    try {
+      // CoreEventBus.checkHealth() already returns the full standardized health object.
+      return await this.eventBus.checkHealth(); //
+    } catch (error) {
+      return createStandardHealthCheckResult(SYSTEM_STATUS.UNHEALTHY, { error: 'CoreEventBus health check failed.' }, [error]); //
+    }
+  }
+
+  getSystemStatus() { //
+    return { //
+        name: this.constructor.name, //
+        version: EventBusSystem.version, //
+        status: this.state.status, //
+        uptime: this.state.startTime ? Date.now() - this.state.startTime : 0, //
+        initialized: this.state.status === SYSTEM_STATUS.RUNNING, //
+        errorCount: this.state.errors.length, //
+        timestamp: new Date().toISOString(), //
+        coreEventBusStatus: this.eventBus ? this.eventBus.getSystemStatus().status : SYSTEM_STATUS.UNAVAILABLE || 'unavailable'
+    };
   }
 }
 
 /**
- * Factory function for container
- * @param {Object} deps - Dependencies
- * @returns {EventBusSystem} - Event bus system instance
+ * Factory function for creating an EventBusSystem instance.
+ * @param {object} [deps={}] - Dependencies for the EventBusSystem.
+ * @returns {EventBusSystem}
  */
-export function createEventBusSystem(deps = {}) {
-  // Provide default dependencies if needed
-  const defaultDeps = {
-    errorSystem: deps.errorSystem || {
-      handleError: async () => {} // No-op handler if not provided
-    },
-    config: deps.config || {} // Empty config if not provided
-  };
-
-  // Create and return the EventBusSystem instance
-  return new EventBusSystem({
-    ...defaultDeps,
-    ...deps
-  });
+export function createEventBusSystem(deps = {}) { //
+  // Original factory provided default no-op errorSystem and empty config
+  // This is good, but dependencies are now validated in constructor.
+  // Consider if this factory should also perform preliminary checks or if constructor validation is enough.
+  return new EventBusSystem(deps); //
 }
