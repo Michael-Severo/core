@@ -1,6 +1,6 @@
 {
-  "name": "core",
-  "version": "2.0.0",
+  "name": "tsmis_core",
+  "version": "2.1.0",
   "description": "TSMIS Core Runtime",
   "main": "N/A",
   "scripts": {

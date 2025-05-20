@@ -5,7 +5,7 @@
 
 import { EventEmitter } from 'events'; // Node.js built-in
 import { EventError } from '../errors/index.js'; // Assuming errors/index.js exports EventError
-import { ErrorCodes } from '../errors/ErrorCodes.js'; // Assuming ErrorCodes are in their own file
+import { ErrorCodes } from '../errors/ErrorCodes.js';
 import { SYSTEM_STATUS, LIFECYCLE_EVENTS, DEFAULT_CONFIG } from '../common/SystemConstants.js';
 import { safeHandleError, createStandardHealthCheckResult } from '../common/ErrorUtils.js';
 
@@ -14,7 +14,7 @@ import { safeHandleError, createStandardHealthCheckResult } from '../common/Erro
 // const { v4: uuidv4 } = require('uuid'); // Example if using uuid library
 
 export class CoreEventBus extends EventEmitter {
-  static dependencies = ['errorSystem', 'config']; // [cite: 401]
+  static dependencies = ['errorSystem', 'config']; // [cite: 2135]
   static version = '2.0.0'; // Example version bump
 
   /**
@@ -23,19 +23,19 @@ export class CoreEventBus extends EventEmitter {
    * @param {object} [deps.errorSystem] - The ErrorSystem instance.
    * @param {object} [deps.config={}] - Configuration object.
    */
-  constructor(deps = {}) { // [cite: 402]
+  constructor(deps = {}) { // [cite: 2138]
     super();
     this.deps = {
       errorSystem: deps.errorSystem,
-      config: deps.config || {},
+      config: deps.config || {}, // [cite: 2139]
     };
 
-    this.queues = new Map(); // [cite: 402]
-    this.subscriptions = new Map(); // [cite: 402]
-    this.history = new Map(); // [cite: 403]
-    this.maxHistorySize = this.deps.config?.eventBus?.maxHistorySize || // Adjusted config path
-                          this.deps.config?.eventHistory?.maxSize || // Kept original for compatibility
-                          DEFAULT_CONFIG.MAX_ERROR_HISTORY; // Default if none specified
+    this.queues = new Map(); // [cite: 2140]
+    this.subscriptions = new Map(); // [cite: 2140]
+    this.history = new Map(); // [cite: 2140]
+    this.maxHistorySize = this.deps.config?.eventBus?.maxHistorySize || // [cite: 2141] Adjusted config path
+                          this.deps.config?.eventHistory?.maxSize || // [cite: 2142] Kept original for compatibility
+                          DEFAULT_CONFIG.MAX_ERROR_HISTORY; // [cite: 2142] Default if none specified
     // this.initialized is now driven by this.state.status
 
     this.state = {
@@ -44,13 +44,13 @@ export class CoreEventBus extends EventEmitter {
       errors: [], // For internal errors of CoreEventBus
       metrics: new Map(),
       healthChecks: new Map(),
-    }; // [cite: 404]
+    }; // [cite: 2144]
 
     this._originalEmit = null; // For wildcard forwarding
-    this._processingNewListener = false; // Guard for newListener recursion
+    this._processingNewListener = false; // [cite: 2145] Guard for newListener recursion
 
-    this.setupDefaultHealthChecks(); // [cite: 405]
-    this._setupInternalListeners(); // Setup newListener/removeListener logic
+    this.setupDefaultHealthChecks(); // [cite: 2145, 2312]
+    this._setupInternalListeners(); // [cite: 2146] Setup newListener/removeListener logic
   }
 
   /**
@@ -63,18 +63,18 @@ export class CoreEventBus extends EventEmitter {
       this._processingNewListener = true;
       try {
         const eventNameStr = typeof eventName === 'string' ? eventName : String(eventName);
-        if (eventNameStr === '*') { // [cite: 428, 429]
-          this._enableWildcardForwarding(); // [cite: 429]
+        if (eventNameStr === '*') { // [cite: 2147]
+          this._enableWildcardForwarding(); // [cite: 2147]
         }
-      } finally {
+      }
+      finally {
         this._processingNewListener = false;
       }
     });
-
     this.on('removeListener', (eventName) => {
       const eventNameStr = typeof eventName === 'string' ? eventName : String(eventName);
-      if (eventNameStr === '*' && this.listenerCount('*') === 0) { // [cite: 430]
-        this._disableWildcardForwarding(); // [cite: 430]
+      if (eventNameStr === '*' && this.listenerCount('*') === 0) { // [cite: 2149]
+        this._disableWildcardForwarding(); // [cite: 2149]
       }
     });
   }
@@ -85,15 +85,14 @@ export class CoreEventBus extends EventEmitter {
    */
   async _handleInternalError(error, context = {}) {
     const errorToLog = !(error instanceof EventError)
-      ? new EventError(ErrorCodes.EVENT.INTERNAL_ERROR || 'INTERNAL_ERROR', error.message, context, { cause: error })
+      ? new EventError(ErrorCodes.EVENT.INTERNAL_ERROR, error.message, context, { cause: error }) // Uses unprefixed 'INTERNAL_ERROR'
       : error;
-
     this.state.errors.push({ error: errorToLog, timestamp: new Date().toISOString(), context });
     if (this.state.errors.length > (this.deps.config?.eventBus?.maxErrorHistory || DEFAULT_CONFIG.MAX_ERROR_HISTORY)) {
-      this.state.errors.shift();
+      this.state.errors.shift(); // [cite: 2154]
     }
     this.recordMetric('eventbus.errors.internal', 1, { errorName: errorToLog.name, errorCode: errorToLog.code });
-    await safeHandleError(this.deps.errorSystem, errorToLog, { source: 'CoreEventBus', ...context });
+    await safeHandleError(this.deps.errorSystem, errorToLog, { source: 'CoreEventBus', ...context }); // [cite: 2155]
   }
 
   /**
@@ -102,40 +101,31 @@ export class CoreEventBus extends EventEmitter {
    */
   async initialize() {
     if (this.state.status === SYSTEM_STATUS.RUNNING || this.state.status === SYSTEM_STATUS.INITIALIZING) {
-      const err = new EventError(ErrorCodes.EVENT.ALREADY_INITIALIZED, 'CoreEventBus is already initialized or initializing.'); // [cite: 425]
-      await this._handleInternalError(err, { currentStatus: this.state.status });
-      return this;
+      const err = new EventError(ErrorCodes.EVENT.ALREADY_INITIALIZED, 'CoreEventBus is already initialized or initializing.'); // [cite: 2156] Uses unprefixed
+      await this._handleInternalError(err, { currentStatus: this.state.status }); // [cite: 2156]
+      return this; // [cite: 2157]
     }
 
     this.emit(LIFECYCLE_EVENTS.INITIALIZING, { system: 'CoreEventBus' });
-    this.state.status = SYSTEM_STATUS.INITIALIZING; // [cite: 426]
-    this.state.startTime = Date.now(); // [cite: 427]
+    this.state.status = SYSTEM_STATUS.INITIALIZING; // [cite: 2158]
+    this.state.startTime = Date.now(); // [cite: 2158]
 
     try {
       // Wildcard forwarding setup is now handled by newListener/removeListener
-      this.state.status = SYSTEM_STATUS.RUNNING; // [cite: 431]
-      this.recordMetric('eventbus.initialized.success', 1, { timestamp: Date.now() });
-      // Emit system:initialized AFTER this.emit is potentially wrapped by wildcard forwarding
-      // to ensure system:initialized can also be caught by a wildcard if needed.
-      // However, system events are often special. The current emit logic forwards non-"*" events.
-      // Let's emit system events directly using super.emit if this.emit is wrapped,
-      // or ensure system events are not doubly processed by wildcard if not desired.
-      // For now, standard emit:
-      this.emit(LIFECYCLE_EVENTS.INITIALIZED, { system: 'CoreEventBus', timestamp: new Date().toISOString() }); // [cite: 431]
-      this.emit(LIFECYCLE_EVENTS.RUNNING, { system: 'CoreEventBus', timestamp: new Date().toISOString() });
-
-
+      this.state.status = SYSTEM_STATUS.RUNNING; // [cite: 2159]
+      this.recordMetric('eventbus.initialized.success', 1, { timestamp: Date.now() }); // [cite: 2160]
+      this.emit(LIFECYCLE_EVENTS.INITIALIZED, { system: 'CoreEventBus', timestamp: new Date().toISOString() }); // [cite: 2164]
+      this.emit(LIFECYCLE_EVENTS.RUNNING, { system: 'CoreEventBus', timestamp: new Date().toISOString() }); // [cite: 2165]
     } catch (error) {
-      this.state.status = SYSTEM_STATUS.ERROR; // [cite: 432]
-      this.recordMetric('eventbus.initialized.failure', 1, { error: error.code, timestamp: Date.now() }); // [cite: 434]
-      // The original code had `await this.handleError(error)` here, which is for external errors.
-      // For init errors, use _handleInternalError.
-      await this._handleInternalError(error, { phase: 'initialization' }); // [cite: 434]
-      throw error instanceof EventError ? error : new EventError( // [cite: 434]
-        ErrorCodes.EVENT.INITIALIZATION_FAILED, // [cite: 434]
-        'CoreEventBus failed to initialize.', // [cite: 434]
-        { originalMessage: error.message }, // [cite: 434]
-        { cause: error } // [cite: 434]
+      this.state.status = SYSTEM_STATUS.ERROR; // [cite: 2166]
+      this.recordMetric('eventbus.initialized.failure', 1, { error: error.code, timestamp: Date.now() }); // [cite: 2167]
+      await this._handleInternalError(error, { phase: 'initialization' }); // [cite: 2169]
+      throw error instanceof EventError ?
+      error : new EventError( // [cite: 2170]
+        ErrorCodes.EVENT.INITIALIZATION_FAILED, // Uses unprefixed // [cite: 2170]
+        'CoreEventBus failed to initialize.', // [cite: 2170]
+        { originalMessage: error.message }, // [cite: 2170]
+        { cause: error } // [cite: 2170]
       );
     }
     return this;
@@ -146,42 +136,24 @@ export class CoreEventBus extends EventEmitter {
    * @private
    */
   _enableWildcardForwarding() {
-    if (this._originalEmit) return; // Already enabled [cite: 417]
-    this._originalEmit = super.emit; // Store the original EventEmitter.emit [cite: 418]
+    if (this._originalEmit) return; // [cite: 2173]
+    this._originalEmit = super.emit; // [cite: 2173]
 
-    // Replace the emit method of this instance
-    // Note: We are replacing `this.emit` which is inherited from EventEmitter's prototype.
-    // This instance's `emit` will now be this new function.
-    // Calls to `super.emit()` inside this new function will call the original EventEmitter.emit.
     const newEmit = (eventName, ...args) => {
-      // Call original emit for the specific event
-      // The first argument to `_originalEmit` should be `this` (the CoreEventBus instance)
-      const result = this._originalEmit.call(this, eventName, ...args); // [cite: 419]
+      const result = this._originalEmit.call(this, eventName, ...args); // [cite: 2178]
 
-      // Forward to wildcard handlers ('*') if the eventName itself is not '*'
-      // CRITICAL FIX: Pass the actual arguments received by this emit, not re-parsing.
-      // If args[0] is the wrapped event object, that's what we forward.
-      if (eventName !== '*' && this.listenerCount('*') > 0) { // [cite: 420]
-          // Wildcard listeners expect the event object as their first argument.
-          // And the event name as the "emitted" event for the wildcard listener.
-          // So, emit the event `*` with arguments `(originalEventName, actualEventPayloadObject)`
-          // OR, emit `*` with argument `(actualEventPayloadObject)` which also has `actualEventPayloadObject.name`.
-          // Let's align with the latter for simplicity for the wildcard handler.
-          // The actualEventPayloadObject is typically args[0] for our wrapped events.
+      if (eventName !== '*' && this.listenerCount('*') > 0) { // [cite: 2180]
         if (args.length > 0 && typeof args[0] === 'object' && args[0] !== null && args[0].id && args[0].name) {
-            this._originalEmit.call(this, '*', args[0]); // Forward the full event object [cite: 420]
+            this._originalEmit.call(this, '*', args[0]); // [cite: 2186]
         } else {
-            // This case implies a non-standard event emission not using our wrapped event object.
-            // Or it's a system event not following the pattern.
-            // For now, maintain previous behavior if event object isn't found.
-            this._originalEmit.call(this, '*', eventName, ...args);
+            this._originalEmit.call(this, '*', eventName, ...args); // [cite: 2189]
         }
       }
       return result;
     };
     this.emit = newEmit;
 
-    this.recordMetric('eventbus.wildcard.enabled', 1); // [cite: 422]
+    this.recordMetric('eventbus.wildcard.enabled', 1); // [cite: 2190]
   }
 
   /**
@@ -189,10 +161,10 @@ export class CoreEventBus extends EventEmitter {
    * @private
    */
   _disableWildcardForwarding() {
-    if (!this._originalEmit) return; // [cite: 422]
-    this.emit = this._originalEmit; // Restore original EventEmitter.emit [cite: 423]
-    this._originalEmit = null; // [cite: 423]
-    this.recordMetric('eventbus.wildcard.disabled', 1); // [cite: 424]
+    if (!this._originalEmit) return; // [cite: 2192]
+    this.emit = this._originalEmit; // [cite: 2192]
+    this._originalEmit = null; // [cite: 2193]
+    this.recordMetric('eventbus.wildcard.disabled', 1); // [cite: 2193]
   }
 
   /**
@@ -203,50 +175,48 @@ export class CoreEventBus extends EventEmitter {
    * @returns {Promise<boolean>} Whether the event had listeners (or was queued).
    */
   async emit(eventName, data, options = {}) { // This is the public emit, potentially wrapped
-    if (typeof eventName !== 'string' || !eventName.trim()) { // [cite: 439]
+    if (typeof eventName !== 'string' || !eventName.trim()) { // [cite: 2197]
       const err = new EventError(
-        ErrorCodes.EVENT.INVALID_EVENT_NAME, // [cite: 440]
-        'Event name must be a non-empty string.', // [cite: 440]
-        { providedEventName: eventName } // [cite: 440]
+        ErrorCodes.EVENT.INVALID_EVENT_NAME, // Uses unprefixed // [cite: 2197]
+        'Event name must be a non-empty string.', // [cite: 2197]
+        { providedEventName: eventName } // [cite: 2197]
       );
       await this._handleInternalError(err, { eventName, data, options });
       throw err;
     }
 
     const eventId = global.crypto && typeof global.crypto.randomUUID === 'function'
-                    ? global.crypto.randomUUID() // For Node.js
-                    : Math.random().toString(36).substring(2) + Date.now().toString(36); // Basic fallback
+                    ? global.crypto.randomUUID() // [cite: 2199]
+                    : Math.random().toString(36).substring(2) + Date.now().toString(36); // [cite: 2200]
 
-    const event = { // [cite: 441]
-      id: eventId, // [cite: 441]
-      name: eventName, // [cite: 441]
-      data, // [cite: 441]
-      timestamp: new Date().toISOString(), // [cite: 441]
-      metadata: options.metadata || {}, // [cite: 441]
+    const event = { // [cite: 2200]
+      id: eventId, // [cite: 2200]
+      name: eventName, // [cite: 2200]
+      data, // [cite: 2200]
+      timestamp: new Date().toISOString(), // [cite: 2200]
+      metadata: options.metadata || {}, // [cite: 2201]
     };
 
     try {
-      this.trackEvent(event); // [cite: 442]
-      this.recordMetric('eventbus.events.emitted', 1, { eventName, queued: !!options.queue }); // [cite: 443]
+      this.trackEvent(event); // [cite: 2202]
+      this.recordMetric('eventbus.events.emitted', 1, { eventName, queued: !!options.queue }); // [cite: 2203]
 
-      if (options.queue) { // [cite: 444]
-        await this.queueEvent(event, options); // [cite: 444] Changed to await
-        return true; // Event was queued
+      if (options.queue) { // [cite: 2203]
+        await this.queueEvent(event, options); // [cite: 2204]
+        return true; // [cite: 2204]
       }
 
-      // Use super.emit (or this._originalEmit if wrapped) to call the actual EventEmitter emit
-      const emitFn = this._originalEmit || super.emit;
-      return emitFn.call(this, eventName, event); // Pass the wrapped event object [cite: 445]
+      const emitFn = this._originalEmit || super.emit; // [cite: 2206]
+      return emitFn.call(this, eventName, event); // Pass the wrapped event object // [cite: 2206]
 
     } catch (error) {
-      // This catch is for errors during the emit process itself (e.g. history, queueing)
-      // not for errors thrown by listeners (those are handled by EventEmitter).
-      await this._handleInternalError(error, { eventName, eventId: event.id, options }); // [cite: 446]
-      throw error instanceof EventError ? error : new EventError( // [cite: 447]
-        ErrorCodes.EVENT.EMISSION_FAILED, // [cite: 447]
-        `Failed to emit event: ${eventName}`, // [cite: 447]
-        { eventName, eventId: event.id, options }, // [cite: 447]
-        { cause: error } // [cite: 447]
+      await this._handleInternalError(error, { eventName, eventId: event.id, options }); // [cite: 2207]
+      throw error instanceof EventError ?
+      error : new EventError( // [cite: 2207]
+        ErrorCodes.EVENT.EMISSION_FAILED, // Uses unprefixed // [cite: 2208]
+        `Failed to emit event: ${eventName}`, // [cite: 2208]
+        { eventName, eventId: event.id, options }, // [cite: 2208]
+        { cause: error } // [cite: 2208]
       );
     }
   }
@@ -258,63 +228,59 @@ export class CoreEventBus extends EventEmitter {
    * @param {object} [options={}] - Subscription options.
    * @returns {string} Subscription ID.
    */
-  subscribe(pattern, handler, options = {}) { // [cite: 448]
-    if (typeof pattern !== 'string' || !pattern.trim()) { // [cite: 448]
-      const err = new EventError(ErrorCodes.EVENT.INVALID_PATTERN, 'Event pattern must be a non-empty string.', { pattern }); // [cite: 449]
-      this._handleInternalError(err); // Log, then throw
-      throw err;
+  subscribe(pattern, handler, options = {}) { // [cite: 2210]
+    if (typeof pattern !== 'string' || !pattern.trim()) { // [cite: 2213]
+      const err = new EventError(ErrorCodes.EVENT.INVALID_PATTERN, 'Event pattern must be a non-empty string.', { pattern }); // Uses unprefixed // [cite: 2214]
+      this._handleInternalError(err); // Log, then throw // [cite: 2214]
+      throw err; // [cite: 2215]
     }
-    if (typeof handler !== 'function') { // [cite: 450]
-      const err = new EventError(ErrorCodes.EVENT.INVALID_HANDLER, 'Event handler must be a function.', { pattern }); // [cite: 450]
-      this._handleInternalError(err);
-      throw err;
+    if (typeof handler !== 'function') { // [cite: 2215]
+      const err = new EventError(ErrorCodes.EVENT.INVALID_HANDLER, 'Event handler must be a function.', { pattern }); // Uses unprefixed // [cite: 2216]
+      this._handleInternalError(err); // [cite: 2216]
+      throw err; // [cite: 2217]
     }
 
     const subscriptionId = global.crypto && typeof global.crypto.randomUUID === 'function'
-                        ? global.crypto.randomUUID()
-                        : Math.random().toString(36).substring(2) + Date.now().toString(36);
-
-    const subscription = { // [cite: 451]
-      id: subscriptionId, // [cite: 451]
-      pattern, // [cite: 451]
-      handler, // [cite: 451]
-      options: options || {}, // [cite: 451]
-      created: new Date().toISOString(), // [cite: 451]
+                        ? global.crypto.randomUUID() // [cite: 2218]
+                        : Math.random().toString(36).substring(2) + Date.now().toString(36); // [cite: 2219]
+    const subscription = { // [cite: 2219]
+      id: subscriptionId, // [cite: 2219]
+      pattern, // [cite: 2219]
+      handler, // [cite: 2219]
+      options: options || {}, // [cite: 2220]
+      created: new Date().toISOString(), // [cite: 2220]
       // internalHandler will store the actual function passed to EventEmitter.on
-    }; //
+    }; // [cite: 2221]
 
     try {
-      if (pattern === '*') { // [cite: 453]
-        // Wildcard handler receives the full event object as its first argument
-        subscription.internalHandler = (event) => handler(event); // [cite: 453]
-        super.on('*', subscription.internalHandler); // [cite: 454]
+      if (pattern === '*') { // [cite: 2221]
+        subscription.internalHandler = (event) => handler(event); // [cite: 2222]
+        super.on('*', subscription.internalHandler); // [cite: 2222]
       } else if (pattern.includes('*')) {
-        const regexPattern = new RegExp('^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$'); // More robust regex
-        // Pattern handlers also receive the full event object
-        subscription.internalHandler = (event) => { // [cite: 455]
-          // The event argument here comes from the wildcard emit: emit('*', fullEventObject)
-          if (event && typeof event.name === 'string' && regexPattern.test(event.name)) { // [cite: 455]
-            handler(event); // [cite: 456]
+        const regexPattern = new RegExp('^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$'); // [cite: 2224]
+        subscription.internalHandler = (event) => { // [cite: 2224]
+          if (event && typeof event.name === 'string' && regexPattern.test(event.name)) { // [cite: 2225]
+            handler(event); // [cite: 2225]
           }
         };
-        super.on('*', subscription.internalHandler); // Listen on wildcard, filter by name [cite: 456]
+        super.on('*', subscription.internalHandler); // Listen on wildcard, filter by name // [cite: 2226]
       } else {
-        // Direct match, handler receives the full event object
-        subscription.internalHandler = (event) => handler(event);
-        super.on(pattern, subscription.internalHandler); // [cite: 452]
+        subscription.internalHandler = (event) => handler(event); // [cite: 2227]
+        super.on(pattern, subscription.internalHandler); // [cite: 2227]
       }
 
-      this.subscriptions.set(subscription.id, subscription); //
-      this.recordMetric('eventbus.subscriptions.added', 1, { pattern }); // [cite: 457]
-      return subscription.id; // [cite: 458]
+      this.subscriptions.set(subscription.id, subscription); // [cite: 2228]
+      this.recordMetric('eventbus.subscriptions.added', 1, { pattern }); // [cite: 2229]
+      return subscription.id; // [cite: 2229]
     } catch (error) {
       // Use _handleInternalError for subscription setup issues
-      await this._handleInternalError(error, { phase: 'subscribe', pattern }); // [cite: 458]
-      throw error instanceof EventError ? error : new EventError( // [cite: 459]
-        ErrorCodes.EVENT.SUBSCRIPTION_FAILED, // [cite: 459]
-        `Failed to subscribe to pattern: ${pattern}`, // [cite: 459]
-        { pattern }, // [cite: 459]
-        { cause: error } // [cite: 459]
+      this._handleInternalError(error, { phase: 'subscribe', pattern }); // This line had await, but _handleInternalError is async. Assuming the original intent.
+      throw error instanceof EventError ?
+      error : new EventError( // [cite: 2232]
+        ErrorCodes.EVENT.SUBSCRIPTION_FAILED, // Uses unprefixed // [cite: 2232]
+        `Failed to subscribe to pattern: ${pattern}`, // [cite: 2232]
+        { pattern }, // [cite: 2232]
+        { cause: error } // [cite: 2232]
       );
     }
   }
@@ -324,34 +290,30 @@ export class CoreEventBus extends EventEmitter {
    * @param {string} subscriptionId - The ID returned by subscribe.
    * @returns {boolean} True if unsubscribed, false otherwise.
    */
-  unsubscribe(subscriptionId) { // [cite: 460]
-    const subscription = this.subscriptions.get(subscriptionId); // [cite: 460]
-    if (!subscription) { // [cite: 461]
-      // Don't throw if not found, just return false or log a warning
-      this.deps.logger?.warn(`[CoreEventBus] Unsubscribe failed: Subscription ID '${subscriptionId}' not found.`);
-      return false;
+  unsubscribe(subscriptionId) { // [cite: 2234]
+    const subscription = this.subscriptions.get(subscriptionId); // [cite: 2236]
+    if (!subscription) { // [cite: 2236]
+      this.deps.logger?.warn(`[CoreEventBus] Unsubscribe failed: Subscription ID '${subscriptionId}' not found.`); // [cite: 2237]
+      return false; // [cite: 2237]
     }
 
     try {
-      const { pattern, internalHandler } = subscription; // [cite: 462]
-      if (pattern.includes('*')) { // [cite: 464, 465, 468]
-        super.removeListener('*', internalHandler); // [cite: 465, 466, 468]
+      const { pattern, internalHandler } = subscription; // [cite: 2238]
+      if (pattern.includes('*')) { // [cite: 2238]
+        super.removeListener('*', internalHandler); // [cite: 2239]
       } else {
-        super.removeListener(pattern, internalHandler); // [cite: 463, 467]
+        super.removeListener(pattern, internalHandler); // [cite: 2240]
       }
 
-      this.subscriptions.delete(subscriptionId); // [cite: 469]
-      this.recordMetric('eventbus.subscriptions.removed', 1, { pattern: subscription.pattern }); // [cite: 470]
-      return true; // [cite: 471]
+      this.subscriptions.delete(subscriptionId); // [cite: 2241]
+      this.recordMetric('eventbus.subscriptions.removed', 1, { pattern: subscription.pattern }); // [cite: 2242]
+      return true; // [cite: 2242]
     } catch (error) {
-      await this._handleInternalError(error, { phase: 'unsubscribe', subscriptionId }); // [cite: 471]
-      // We might not want to re-throw an EventError here if the primary goal (removing from map) succeeded.
-      // However, if removeListener failed, it's an internal issue.
-      // For now, let's not escalate to EventError unless the error is from EventEmitter itself.
+      this._handleInternalError(error, { phase: 'unsubscribe', subscriptionId }); // This line had await.
       if (!(error instanceof EventError)) {
-          this.deps.logger?.error(`[CoreEventBus] Error during removeListener for ${subscriptionId}: ${error.message}`);
+          this.deps.logger?.error(`[CoreEventBus] Error during removeListener for ${subscriptionId}: ${error.message}`); // [cite: 2247]
       }
-      return false; // Indicate potential issue
+      return false; // Indicate potential issue // [cite: 2247]
     }
   }
 
@@ -361,27 +323,28 @@ export class CoreEventBus extends EventEmitter {
    * @param {object} [options={}] - Queuing options (e.g., immediate).
    * @returns {Promise<boolean>} True if queued successfully.
    */
-  async queueEvent(event, options = {}) { // [cite: 473]
+  async queueEvent(event, options = {}) { // [cite: 2248]
     try {
-      const queueName = event.name;
-      const queue = this.queues.get(queueName) || []; // [cite: 474]
-      const queueItem = { event, options, timestamp: new Date().toISOString() }; // [cite: 474]
-      queue.push(queueItem); // [cite: 475]
-      this.queues.set(queueName, queue); // [cite: 475]
+      const queueName = event.name; // [cite: 2250]
+      const queue = this.queues.get(queueName) || []; // [cite: 2250]
+      const queueItem = { event, options, timestamp: new Date().toISOString() }; // [cite: 2251]
+      queue.push(queueItem); // [cite: 2251]
+      this.queues.set(queueName, queue); // [cite: 2252]
 
-      this.recordMetric('eventbus.events.queued', 1, { eventName: queueName, queueSize: queue.length }); // [cite: 475]
+      this.recordMetric('eventbus.events.queued', 1, { eventName: queueName, queueSize: queue.length }); // [cite: 2253]
 
-      if (options.immediate) { // [cite: 476]
-        await this.processQueue(queueName); // [cite: 476]
+      if (options.immediate) { // [cite: 2253]
+        await this.processQueue(queueName); // [cite: 2254]
       }
-      return true; //
+      return true; // [cite: 2255]
     } catch (error) {
-      await this._handleInternalError(error, { phase: 'queueEvent', eventName: event.name }); // [cite: 477]
-      throw error instanceof EventError ? error : new EventError( // [cite: 478]
-        ErrorCodes.EVENT.QUEUE_OPERATION_FAILED || 'QUEUE_OPERATION_FAILED', // Assuming new code [cite: 478]
-        `Failed to queue event: ${event.name}`, // [cite: 478]
-        { eventName: event.name }, // [cite: 478]
-        { cause: error } // [cite: 478]
+      await this._handleInternalError(error, { phase: 'queueEvent', eventName: event.name }); // [cite: 2256]
+      throw error instanceof EventError ?
+      error : new EventError( // [cite: 2257]
+        ErrorCodes.EVENT.QUEUE_OPERATION_FAILED, // Uses unprefixed (assuming it's 'QUEUE_OPERATION_FAILED') // [cite: 2257]
+        `Failed to queue event: ${event.name}`, // [cite: 2257]
+        { eventName: event.name }, // [cite: 2257]
+        { cause: error } // [cite: 2257]
       );
     }
   }
@@ -391,43 +354,36 @@ export class CoreEventBus extends EventEmitter {
    * @param {string} queueName - The name of the queue to process.
    * @returns {Promise<number>} The number of events processed.
    */
-  async processQueue(queueName) { // [cite: 479]
-    const queue = this.queues.get(queueName) || []; // [cite: 480]
+  async processQueue(queueName) { // [cite: 2259]
+    const queue = this.queues.get(queueName) || []; // [cite: 2261]
     if (queue.length === 0) return 0;
 
     let processedCount = 0;
-    const startTime = Date.now();
-    const BATCH_SIZE = this.deps.config?.eventBus?.queueBatchSize || 100; // Process in batches
+    const startTime = Date.now(); // [cite: 2262]
+    const BATCH_SIZE = this.deps.config?.eventBus?.queueBatchSize || 100; // Process in batches // [cite: 2262]
 
-    // Process only up to BATCH_SIZE to prevent blocking for too long if queue is huge
-    const itemsToProcess = queue.splice(0, Math.min(queue.length, BATCH_SIZE));
-
-    for (const { event } of itemsToProcess) { // [cite: 481]
+    const itemsToProcess = queue.splice(0, Math.min(queue.length, BATCH_SIZE)); // [cite: 2263]
+    for (const { event } of itemsToProcess) { // [cite: 2263]
       try {
-        // Use super.emit or _originalEmit to bypass this instance's emit logic (like queuing again)
-        const emitFn = this._originalEmit || super.emit;
-        emitFn.call(this, event.name, event); // Emit the full event object [cite: 481]
-        processedCount++; // [cite: 481]
+        const emitFn = this._originalEmit || super.emit; // [cite: 2264]
+        emitFn.call(this, event.name, event); // Emit the full event object // [cite: 2264]
+        processedCount++; // [cite: 2265]
       } catch (handlerError) {
-        // Error thrown by a listener during the emit. This is an application error, not an EventBus error.
-        // We should report it via the main ErrorSystem.
         const appError = new EventError(
-          ErrorCodes.EVENT.HANDLER_ERROR, // [cite: 482]
-          `Error in handler for event: ${event.name} (ID: ${event.id}) during queue processing.`, // [cite: 482]
-          { eventName: event.name, eventId: event.id }, // [cite: 482]
-          { cause: handlerError } // [cite: 482]
+          ErrorCodes.EVENT.HANDLER_ERROR, // Uses unprefixed // [cite: 2267]
+          `Error in handler for event: ${event.name} (ID: ${event.id}) during queue processing.`, // [cite: 2267]
+          { eventName: event.name, eventId: event.id }, // [cite: 2267]
+          { cause: handlerError } // [cite: 2267]
         );
-        // Use the public handleError which forwards to ErrorSystem
-        await this.handleError(appError, { phase: 'processQueue-handler', queueName, eventId: event.id });
-        // Continue processing other events in the batch
+        await this.handleError(appError, { phase: 'processQueue-handler', queueName, eventId: event.id }); // [cite: 2269]
       }
     }
 
-    this.recordMetric('eventbus.queue.processed', processedCount, { queueName, processingTimeMs: Date.now() - startTime }); // [cite: 484]
+    this.recordMetric('eventbus.queue.processed', processedCount, { queueName, processingTimeMs: Date.now() - startTime }); // [cite: 2270]
     if (queue.length > 0) {
-        this.recordMetric('eventbus.queue.remaining', queue.length, { queueName });
+        this.recordMetric('eventbus.queue.remaining', queue.length, { queueName }); // [cite: 2271]
     }
-    return processedCount; // [cite: 485]
+    return processedCount; // [cite: 2271]
   }
 
   /**
@@ -436,11 +392,9 @@ export class CoreEventBus extends EventEmitter {
    * @param {Error} error - The error object from the event listener.
    * @param {object} [context={}] - Context from the event listener.
    */
-  async handleError(error, context = {}) { // [cite: 435]
-    // This is the public method for listeners to report their errors.
-    // It should use safeHandleError to forward to the configured ErrorSystem.
-    this.recordMetric('eventbus.errors.reported_by_listener', 1, { errorName: error.name, errorCode: error.code });
-    await safeHandleError(this.deps.errorSystem, error, { source: 'CoreEventBusListener', ...context }); // [cite: 438]
+  async handleError(error, context = {}) { // [cite: 2272]
+    this.recordMetric('eventbus.errors.reported_by_listener', 1, { errorName: error.name, errorCode: error.code }); // [cite: 2276]
+    await safeHandleError(this.deps.errorSystem, error, { source: 'CoreEventBusListener', ...context }); // [cite: 2276]
   }
 
 
@@ -448,181 +402,174 @@ export class CoreEventBus extends EventEmitter {
    * Processes all events in all queues.
    * @returns {Promise<Object.<string, number>>} An object mapping queue names to processed counts.
    */
-  async processAllQueues() { // [cite: 487]
-    const results = {}; // [cite: 488]
-    const queueNames = Array.from(this.queues.keys()); // [cite: 488]
-    let totalProcessed = 0;
-
-    for (const queueName of queueNames) { // [cite: 489]
+  async processAllQueues() { // [cite: 2277]
+    const results = {}; // [cite: 2279]
+    const queueNames = Array.from(this.queues.keys()); // [cite: 2279]
+    let totalProcessed = 0; // [cite: 2280]
+    for (const queueName of queueNames) { // [cite: 2280]
       try {
-        results[queueName] = await this.processQueue(queueName); // [cite: 489]
-        totalProcessed += results[queueName];
+        results[queueName] = await this.processQueue(queueName); // [cite: 2281]
+        totalProcessed += results[queueName]; // [cite: 2282]
       } catch (error) {
-        // _handleInternalError for errors in the processQueue logic itself
-        await this._handleInternalError(error, { phase: 'processAllQueues', queueName }); // [cite: 490]
-        // Don't rethrow here to allow other queues to be processed. Error is logged.
+        await this._handleInternalError(error, { phase: 'processAllQueues', queueName }); // [cite: 2283]
         results[queueName] = 0; // Mark as 0 processed for this queue due to error
       }
     }
-    this.recordMetric('eventbus.all_queues.processed_total', totalProcessed);
-    return results; //
+    this.recordMetric('eventbus.all_queues.processed_total', totalProcessed); // [cite: 2285]
+    return results; // [cite: 2285]
   }
 
-  trackEvent(event) { // [cite: 491]
-    const eventHistoryQueue = this.history.get(event.name) || []; // [cite: 492]
-    eventHistoryQueue.unshift(event); // [cite: 492]
-    if (eventHistoryQueue.length > this.maxHistorySize) { // [cite: 492]
-      eventHistoryQueue.pop(); // [cite: 493]
+  trackEvent(event) { // [cite: 2285]
+    const eventHistoryQueue = this.history.get(event.name) || []; // [cite: 2286]
+    eventHistoryQueue.unshift(event); // [cite: 2286]
+    if (eventHistoryQueue.length > this.maxHistorySize) { // [cite: 2286]
+      eventHistoryQueue.pop(); // [cite: 2287]
     }
-    this.history.set(event.name, eventHistoryQueue); // [cite: 493]
-    this.recordMetric('eventbus.history.size', eventHistoryQueue.length, { eventName: event.name }); // [cite: 494]
+    this.history.set(event.name, eventHistoryQueue); // [cite: 2288]
+    this.recordMetric('eventbus.history.size', eventHistoryQueue.length, { eventName: event.name }); // [cite: 2289]
   }
 
-  getHistory(eventName, options = {}) { // [cite: 494]
-    const historyQueue = this.history.get(eventName) || []; // [cite: 495]
-    if (options.limit && options.limit > 0) { // [cite: 495]
-      return historyQueue.slice(0, options.limit); // [cite: 496]
+  getHistory(eventName, options = {}) { // [cite: 2289]
+    const historyQueue = this.history.get(eventName) || []; // [cite: 2290]
+    if (options.limit && options.limit > 0) { // [cite: 2290]
+      return historyQueue.slice(0, options.limit); // [cite: 2291]
     }
-    return [...historyQueue]; // Return a copy [cite: 496]
+    return [...historyQueue]; // [cite: 2292]
   }
 
-  getAllHistory(options = {}) { // [cite: 497]
-    const result = {}; // [cite: 497]
-    for (const [eventName, historyQueue] of this.history) { // [cite: 497]
-      result[eventName] = options.limit ? historyQueue.slice(0, options.limit) : [...historyQueue]; // [cite: 498]
+  getAllHistory(options = {}) { // [cite: 2292]
+    const result = {}; // [cite: 2293]
+    for (const [eventName, historyQueue] of this.history) { // [cite: 2293]
+      result[eventName] = options.limit ? historyQueue.slice(0, options.limit) : [...historyQueue]; // [cite: 2294]
     }
-    return result; // [cite: 499]
+    return result; // [cite: 2295]
   }
 
-  async reset() { // [cite: 499]
-    this.queues.clear(); // [cite: 500]
-    this.history.clear(); // [cite: 500]
-    // Remove only non-system listeners. Our internal 'newListener'/'removeListener' should stay.
-    const eventNames = super.eventNames().filter( // [cite: 500]
+  async reset() { // [cite: 2295]
+    this.queues.clear(); // [cite: 2296]
+    this.history.clear(); // [cite: 2296]
+    const eventNames = super.eventNames().filter( // [cite: 2297]
       (name) => name !== 'newListener' && name !== 'removeListener' && !name.startsWith('system:')
     );
-    for (const eventName of eventNames) { // [cite: 501]
-      super.removeAllListeners(eventName); // [cite: 501]
+    for (const eventName of eventNames) { // [cite: 2298]
+      super.removeAllListeners(eventName); // [cite: 2299]
     }
-    this.subscriptions.clear(); // Clear our tracking of subscriptions
-    this.recordMetric('eventbus.reset', 1); // [cite: 502]
-    // Wildcard forwarding might need to be explicitly disabled if this.emit was wrapped
+    this.subscriptions.clear(); // [cite: 2300]
+    this.recordMetric('eventbus.reset', 1); // [cite: 2301]
     if (this._originalEmit) {
-        this._disableWildcardForwarding();
+        this._disableWildcardForwarding(); // [cite: 2302]
     }
   }
 
-  async shutdown() { // [cite: 503]
-    if (this.state.status === SYSTEM_STATUS.SHUTDOWN || this.state.status === SYSTEM_STATUS.SHUTTING_DOWN) { // [cite: 503]
-      return;
+  async shutdown() { // [cite: 2302]
+    if (this.state.status === SYSTEM_STATUS.SHUTDOWN || this.state.status === SYSTEM_STATUS.SHUTTING_DOWN) { // [cite: 2303]
+      return; // [cite: 2303]
     }
     this.emit(LIFECYCLE_EVENTS.SHUTTING_DOWN, { system: 'CoreEventBus' });
-    this.state.status = SYSTEM_STATUS.SHUTTING_DOWN; // [cite: 504]
+    this.state.status = SYSTEM_STATUS.SHUTTING_DOWN; // [cite: 2304]
 
     try {
-      await this.reset(); // [cite: 504]
-      super.removeAllListeners(); // Remove ALL listeners, including internal ones [cite: 506]
+      await this.reset(); // [cite: 2305]
+      super.removeAllListeners(); // Remove ALL listeners, including internal ones // [cite: 2305]
 
-      this.state.status = SYSTEM_STATUS.SHUTDOWN; // [cite: 504]
+      this.state.status = SYSTEM_STATUS.SHUTDOWN; // [cite: 2306]
       this.state.startTime = null;
-      this.recordMetric('eventbus.shutdown.success', 1, { timestamp: Date.now() }); // [cite: 507]
-      // Cannot emit shutdown if all listeners are removed. Log instead.
-      this.deps.logger?.info('[CoreEventBus] Shutdown complete.');
+      this.recordMetric('eventbus.shutdown.success', 1, { timestamp: Date.now() }); // [cite: 2307]
+      this.deps.logger?.info('[CoreEventBus] Shutdown complete.'); // [cite: 2308]
 
     } catch (error) {
-      this.state.status = SYSTEM_STATUS.ERROR; // [cite: 508]
-      this.recordMetric('eventbus.shutdown.failure', 1, { error: error.code, timestamp: Date.now() }); // [cite: 509]
-      // Use console.error as this is a critical failure during event bus shutdown
-      console.error('[CoreEventBus] Shutdown failed:', error); // [cite: 509]
-      // Do not re-throw from EventBus shutdown itself unless absolutely necessary
+      this.state.status = SYSTEM_STATUS.ERROR; // [cite: 2309]
+      this.recordMetric('eventbus.shutdown.failure', 1, { error: error.code, timestamp: Date.now() }); // [cite: 2310]
+      console.error('[CoreEventBus] Shutdown failed:', error); // [cite: 2311]
     }
   }
 
   // --- Health Checks & Metrics ---
-  setupDefaultHealthChecks() { // [cite: 405]
-    this.registerHealthCheck('eventbus.state', this.checkSystemState.bind(this)); // [cite: 406]
-    this.registerHealthCheck('eventbus.queues', this.checkQueueStatus.bind(this)); // [cite: 407]
-    this.registerHealthCheck('eventbus.subscriptions', this.checkSubscriptionStatus.bind(this)); // [cite: 409]
+  setupDefaultHealthChecks() { // [cite: 2312]
+    this.registerHealthCheck('eventbus.state', this.checkSystemState.bind(this)); // [cite: 2312]
+    this.registerHealthCheck('eventbus.queues', this.checkQueueStatus.bind(this)); // [cite: 2312]
+    this.registerHealthCheck('eventbus.subscriptions', this.checkSubscriptionStatus.bind(this)); // [cite: 2313]
   }
 
-  recordMetric(name, value, tags = {}) { // [cite: 416]
-    this.state.metrics.set(name, { value, timestamp: Date.now(), tags }); // [cite: 417]
+  recordMetric(name, value, tags = {}) { // [cite: 2313]
+    this.state.metrics.set(name, { value, timestamp: Date.now(), tags }); // [cite: 2314]
   }
 
   getMetrics() {
-    const metrics = {};
-    for (const [name, data] of this.state.metrics) {
-      metrics[name] = data;
+    const metrics = {}; // [cite: 2315]
+    for (const [name, data] of this.state.metrics) { // [cite: 2315]
+      metrics[name] = data; // [cite: 2316]
     }
     return metrics;
   }
 
-  registerHealthCheck(name, checkFn) { // [cite: 410]
+  registerHealthCheck(name, checkFn) { // [cite: 2317]
     if (typeof checkFn !== 'function') {
-      const err = new EventError(ErrorCodes.EVENT.INVALID_HANDLER, `Health check '${name}' must be a function.`); // [cite: 411]
-      this._handleInternalError(err); // Log, but rethrow as it's a programming error
-      throw err;
+      const err = new EventError(ErrorCodes.EVENT.INVALID_HANDLER, `Health check '${name}' must be a function.`); // Uses unprefixed // [cite: 2317]
+      this._handleInternalError(err); // Log, but rethrow as it's a programming error // [cite: 2317]
+      throw err; // [cite: 2318]
     }
-    this.state.healthChecks.set(name, checkFn); // [cite: 411]
+    this.state.healthChecks.set(name, checkFn); // [cite: 2318]
   }
 
-  async checkHealth() { // [cite: 411]
-    const results = {}; // [cite: 412]
-    let overallStatus = SYSTEM_STATUS.HEALTHY; // [cite: 412]
+  async checkHealth() { // [cite: 2318]
+    const results = {}; // [cite: 2319]
+    let overallStatus = SYSTEM_STATUS.HEALTHY; // [cite: 2320]
 
-    for (const [name, checkFn] of this.state.healthChecks) { // [cite: 412]
+    for (const [name, checkFn] of this.state.healthChecks) { // [cite: 2320]
       try {
-        const checkResult = await checkFn(); // Expects { status, detail, errors } [cite: 412]
-        results[name] = checkResult; // [cite: 412]
-        if (checkResult.status !== SYSTEM_STATUS.HEALTHY) { // [cite: 413]
-          overallStatus = (overallStatus === SYSTEM_STATUS.HEALTHY) ? SYSTEM_STATUS.DEGRADED : SYSTEM_STATUS.UNHEALTHY; // [cite: 413]
-          if (checkResult.status === SYSTEM_STATUS.UNHEALTHY) overallStatus = SYSTEM_STATUS.UNHEALTHY; // [cite: 414]
+        const checkResult = await checkFn(); // [cite: 2321]
+        results[name] = checkResult; // [cite: 2322]
+        if (checkResult.status !== SYSTEM_STATUS.HEALTHY) { // [cite: 2322]
+          overallStatus = (overallStatus === SYSTEM_STATUS.HEALTHY) ?
+          SYSTEM_STATUS.DEGRADED : SYSTEM_STATUS.UNHEALTHY; // [cite: 2323]
+          if (checkResult.status === SYSTEM_STATUS.UNHEALTHY) overallStatus = SYSTEM_STATUS.UNHEALTHY; // [cite: 2324]
         }
       } catch (error) {
-        results[name] = createStandardHealthCheckResult(SYSTEM_STATUS.UNHEALTHY, { error: 'Health check threw an exception' }, [error]); // [cite: 414]
-        overallStatus = SYSTEM_STATUS.UNHEALTHY; // [cite: 415]
+        results[name] = createStandardHealthCheckResult(SYSTEM_STATUS.UNHEALTHY, { error: 'Health check threw an exception' }, [error]); // [cite: 2325]
+        overallStatus = SYSTEM_STATUS.UNHEALTHY; // [cite: 2325]
       }
     }
-    return { // [cite: 415]
-      name: this.constructor.name, // [cite: 415]
-      version: CoreEventBus.version, // [cite: 415]
-      status: overallStatus, // [cite: 415]
-      timestamp: new Date().toISOString(), // [cite: 415]
-      uptime: this.state.startTime ? Date.now() - this.state.startTime : 0,
+    return { // [cite: 2326]
+      name: this.constructor.name, // [cite: 2326]
+      version: CoreEventBus.version, // [cite: 2326]
+      status: overallStatus, // [cite: 2326]
+      timestamp: new Date().toISOString(), // [cite: 2326]
+      uptime: this.state.startTime ? Date.now() - this.state.startTime : 0, // [cite: 2327]
       errorCount: this.state.errors.length,
-      checks: results, // [cite: 415]
+      checks: results, // [cite: 2327]
     };
   }
 
-  async checkSystemState() { // [cite: 406]
+  async checkSystemState() { // [cite: 2328]
     return createStandardHealthCheckResult(
       this.state.status === SYSTEM_STATUS.RUNNING ? SYSTEM_STATUS.HEALTHY : SYSTEM_STATUS.UNHEALTHY,
-      { // [cite: 406]
-        status: this.state.status, // [cite: 407]
-        uptime: this.state.startTime ? Date.now() - this.state.startTime : 0, // [cite: 407]
-        internalErrorCount: this.state.errors.length // [cite: 407]
+      { // [cite: 2328]
+        status: this.state.status, // [cite: 2329]
+        uptime: this.state.startTime ? Date.now() - this.state.startTime : 0, // [cite: 2329]
+        internalErrorCount: this.state.errors.length // [cite: 2329]
       }
     );
   }
 
-  async checkQueueStatus() { // [cite: 407]
-    const queueCounts = {}; // [cite: 407]
-    let totalQueuedEvents = 0; // [cite: 407]
-    this.queues.forEach((queue, key) => { // [cite: 408]
-      queueCounts[key] = queue.length; // [cite: 408]
-      totalQueuedEvents += queue.length; // [cite: 408]
+  async checkQueueStatus() { // [cite: 2329]
+    const queueCounts = {}; // [cite: 2330]
+    let totalQueuedEvents = 0; // [cite: 2330]
+    this.queues.forEach((queue, key) => { // [cite: 2331]
+      queueCounts[key] = queue.length; // [cite: 2331]
+      totalQueuedEvents += queue.length; // [cite: 2331]
     });
-    return createStandardHealthCheckResult(SYSTEM_STATUS.HEALTHY, { // [cite: 408]
-      queueCount: this.queues.size, // [cite: 408]
-      totalQueuedEvents, // [cite: 408]
-      queues: queueCounts, // [cite: 408]
+    return createStandardHealthCheckResult(SYSTEM_STATUS.HEALTHY, { // [cite: 2332]
+      queueCount: this.queues.size, // [cite: 2332]
+      totalQueuedEvents, // [cite: 2332]
+      queues: queueCounts, // [cite: 2332]
     });
   }
 
-  async checkSubscriptionStatus() { // [cite: 409]
-    return createStandardHealthCheckResult(SYSTEM_STATUS.HEALTHY, { // [cite: 409]
-      count: this.subscriptions.size, // [cite: 409]
-      patterns: Array.from(this.subscriptions.values()).map(s => s.pattern), // [cite: 409]
+  async checkSubscriptionStatus() { // [cite: 2333]
+    return createStandardHealthCheckResult(SYSTEM_STATUS.HEALTHY, { // [cite: 2333]
+      count: this.subscriptions.size, // [cite: 2333]
+      patterns: Array.from(this.subscriptions.values()).map(s => s.pattern), // [cite: 2333]
     });
   }
 
@@ -631,10 +578,10 @@ export class CoreEventBus extends EventEmitter {
         name: this.constructor.name,
         version: CoreEventBus.version,
         status: this.state.status,
-        uptime: this.state.startTime ? Date.now() - this.state.startTime : 0,
+        uptime: this.state.startTime ? Date.now() - this.state.startTime : 0, // [cite: 2335]
         initialized: this.state.status === SYSTEM_STATUS.RUNNING,
         errorCount: this.state.errors.length,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString() // [cite: 2336]
     };
   }
 }
@@ -644,6 +591,6 @@ export class CoreEventBus extends EventEmitter {
  * @param {object} [deps={}] - Dependencies for the CoreEventBus.
  * @returns {CoreEventBus}
  */
-export function createEventBus(deps = {}) { // [cite: 510]
-  return new CoreEventBus(deps); // [cite: 511]
+export function createEventBus(deps = {}) { // [cite: 2337]
+  return new CoreEventBus(deps); // [cite: 2338]
 }

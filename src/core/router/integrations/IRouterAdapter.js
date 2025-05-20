@@ -12,7 +12,8 @@
  */
 export class IRouterAdapter {
   /**
-   * Applies an array of route definitions to the given web framework instance.
+   * Applies an array of route definitions to the given web framework instance
+   * for the initial setup.
    * Each route object in the array will typically include:
    * - `method`: (string) The HTTP method (e.g., 'GET', 'POST').
    * - `path`: (string) The route path.
@@ -29,15 +30,29 @@ export class IRouterAdapter {
    * @throws {Error} If the framework instance is invalid or if applying routes fails.
    */
   async applyRoutes(framework, routes) {
-    // This check ensures that users of this "interface" (which is a class in JS)
-    // know that this method MUST be overridden.
     if (this.constructor === IRouterAdapter) {
         throw new Error('IRouterAdapter.applyRoutes() is an abstract method and must be implemented by a subclass.');
     }
-    // The actual implementation will be in concrete adapters like FastifyAdapter.js
-    // For the purpose of this interface file, we can throw or leave it more abstract.
-    // Throwing ensures it's not called directly on an IRouterAdapter instance.
-    throw new Error('IRouterAdapter.applyRoutes() must be implemented by subclass.'); // [cite: 1316]
+    throw new Error('IRouterAdapter.applyRoutes() must be implemented by subclass.');
+  }
+
+  /**
+   * Dynamically refreshes the routes being served by the adapter.
+   * This method is called when CoreRouter's route table has changed and the
+   * live routes need to be updated without a full application restart.
+   * The implementation will vary by adapter (e.g., updating an internal router,
+   * re-registering a scoped plugin if the framework supports it).
+   *
+   * @param {Array<object>} routes - The new, complete list of route definition objects
+   * from CoreRouter. Each object has the same structure as in `applyRoutes`.
+   * @returns {Promise<void>|void}
+   * @throws {Error} If refreshing routes fails.
+   */
+  async refreshRoutes(routes) {
+    if (this.constructor === IRouterAdapter) {
+        throw new Error('IRouterAdapter.refreshRoutes() is an abstract method and must be implemented by a subclass.');
+    }
+    throw new Error('IRouterAdapter.refreshRoutes() must be implemented by subclass.');
   }
 
   /**
@@ -50,6 +65,3 @@ export class IRouterAdapter {
     // Subclasses can override this if they have specific shutdown logic.
   }
 }
-
-// Named export is generally preferred for classes/interfaces in ES Modules.
-// export default IRouterAdapter; // Original export [cite: 1316]

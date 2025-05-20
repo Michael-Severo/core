@@ -5,13 +5,14 @@
  */
 
 import { EventEmitter } from 'events';
+import { CoreError } from '../errors/CoreError.js'; // Added for direct CoreError usage
 import { ConfigError, ServiceError } from '../errors/index.js'; // Assuming errors/index.js exports these
-import { ErrorCodes } from '../errors/ErrorCodes.js'; // Assuming ErrorCodes are in their own file
+import { ErrorCodes } from '../errors/ErrorCodes.js';
 import { SYSTEM_STATUS, LIFECYCLE_EVENTS, DEFAULT_CONFIG } from '../common/SystemConstants.js';
 import { safeHandleError, createStandardHealthCheckResult } from '../common/ErrorUtils.js';
 
 // Node.js built-in modules for discovery
-import { readdir, stat } from 'fs/promises'; // For scanDirectory
+import { readdir } from 'fs/promises'; // Removed 'stat' as it's not used in scanDirectory
 import { join, dirname, basename } from 'path'; // For scanDirectory and loadConfig
 import { existsSync } from 'fs'; // For loadConfig
 
@@ -47,7 +48,6 @@ export class ContainerSystem extends EventEmitter {
       metrics: new Map(),
       healthChecks: new Map(),
     };
-
     this.registerHealthCheck('container.state', this.checkSystemState.bind(this));
     this.registerHealthCheck('container.components', this.checkComponentStatus.bind(this));
   }
@@ -60,16 +60,22 @@ export class ContainerSystem extends EventEmitter {
    * @param {object} [context={}] - Additional context.
    */
   async _handleInternalError(error, context = {}) {
-    const errorToLog = !(error instanceof ConfigError || error instanceof ServiceError)
-      ? new ServiceError(ErrorCodes.CORE.INTERNAL, error.message, context, { cause: error })
-      : error;
+    // If error is already a ConfigError or ServiceError, use it as is.
+    // Otherwise, wrap it in a ServiceError, indicating a general operational failure within the container.
+    const errorToLog = (error instanceof ConfigError || error instanceof ServiceError)
+      ? error
+      : new ServiceError(
+          ErrorCodes.SERVICE.OPERATION_FAILED, // Using unprefixed service code
+          `Container internal operation failed: ${error.message}`,
+          context,
+          { cause: error }
+        );
 
     this.state.errors.push({ error: errorToLog, timestamp: new Date().toISOString(), context });
     if (this.state.errors.length > (this.deps.config?.container?.maxErrorHistory || DEFAULT_CONFIG.MAX_ERROR_HISTORY)) {
       this.state.errors.shift();
     }
     this.recordMetric('container.errors.internal', 1, { errorName: errorToLog.name, errorCode: errorToLog.code });
-
     // Use safeHandleError, which will use console if errorSystem is not ready/available
     await safeHandleError(this.deps.errorSystem, errorToLog, { source: 'ContainerSystem', ...context });
   }
@@ -81,13 +87,16 @@ export class ContainerSystem extends EventEmitter {
    */
   registerManifest(type, manifest) {
     if (this.state.status === SYSTEM_STATUS.SHUTDOWN || this.state.status === SYSTEM_STATUS.SHUTTING_DOWN) {
-        const err = new ConfigError(ErrorCodes.CORE.INVALID_OPERATION, `Cannot register manifest on a shutdown container: ${type}`);
+        const err = new ConfigError(
+            ErrorCodes.CONFIG.VALIDATION_FAILED, // Using unprefixed config code
+            `Cannot register manifest on a shutdown container: ${type}`
+        );
         this._handleInternalError(err, { type }); // Log, but rethrow as it's a programming error
         throw err;
     }
     if (this.manifests.has(type)) {
       throw new ConfigError( // This is an immediate operational error, throw directly
-        ErrorCodes.CONFIG.DUPLICATE_MANIFEST, // Assuming an appropriate code
+        ErrorCodes.CONFIG.DUPLICATE_MANIFEST, // Using unprefixed config code
         `Manifest already registered for type: ${type}`
       );
     }
@@ -105,14 +114,17 @@ export class ContainerSystem extends EventEmitter {
    */
   register(name, Component, options = {}) {
     if (this.state.status === SYSTEM_STATUS.SHUTDOWN || this.state.status === SYSTEM_STATUS.SHUTTING_DOWN) {
-        const err = new ConfigError(ErrorCodes.CORE.INVALID_OPERATION, `Cannot register component on a shutdown container: ${name}`);
+        const err = new ConfigError(
+            ErrorCodes.CONFIG.VALIDATION_FAILED, // Using unprefixed config code
+            `Cannot register component on a shutdown container: ${name}`
+        );
         this._handleInternalError(err, { name });
         throw err;
     }
     if (this.components.has(name)) {
       throw new ConfigError(
-        ErrorCodes.CONFIG.DUPLICATE_COMPONENT, // [cite: 14]
-        `Component ${name} is already registered` // [cite: 14]
+        ErrorCodes.CONFIG.DUPLICATE_COMPONENT, // Using unprefixed config code
+        `Component ${name} is already registered`
       );
     }
 
@@ -124,10 +136,10 @@ export class ContainerSystem extends EventEmitter {
       },
     });
     // Store dependencies if provided directly on the Component (static property)
-    this.dependencies.set(name, Component.dependencies || []); // [cite: 16]
+    this.dependencies.set(name, Component.dependencies || []);
 
     this.recordMetric('container.components.registered', 1, { name });
-    this.emit('component:registered', { name, Component }); // [cite: 16]
+    this.emit('component:registered', { name, Component });
     return this;
   }
 
@@ -139,50 +151,50 @@ export class ContainerSystem extends EventEmitter {
    */
   async discover(type, basePath) {
     if (!this.manifests.has(type)) {
-      throw new ConfigError( // [cite: 17]
-        ErrorCodes.CONFIG.INVALID_TYPE, // Assuming an appropriate code
-        `No manifest registered for type: ${type}` // [cite: 17]
+      throw new ConfigError(
+        ErrorCodes.CONFIG.MANIFEST_TYPE_NOT_FOUND, // Using unprefixed config code
+        `No manifest registered for type: ${type}`
       );
     }
 
     this.recordMetric('container.discovery.started', 1, { type, basePath });
     try {
       const manifest = this.manifests.get(type);
-      const componentPaths = await this.scanDirectory(basePath); // [cite: 18]
-      const discoveredComponents = new Map(); // [cite: 19]
+      const componentPaths = await this.scanDirectory(basePath);
+      const discoveredComponents = new Map();
 
       for (const path of componentPaths) {
         try {
-          const component = await this.loadComponent(path, manifest); // [cite: 19]
-          if (component) { // [cite: 20]
-            discoveredComponents.set(component.name, component); // [cite: 20]
+          const component = await this.loadComponent(path, manifest);
+          if (component) {
+            discoveredComponents.set(component.name, component);
           }
         } catch (error) {
           // Log individual component load errors but continue discovery
           const discoveryError = new ServiceError(
-            ErrorCodes.SERVICE.LOAD_FAILED, // Assuming an appropriate code
+            ErrorCodes.SERVICE.COMPONENT_LOAD_FAILED, // Using unprefixed service code
             `Error loading component during discovery from ${path}`,
             { path, type, originalMessage: error.message },
             { cause: error }
           );
           await this._handleInternalError(discoveryError, { phase: 'discovery-load', path });
-          this.emit('discovery:error', { path, error: discoveryError }); // [cite: 21]
+          this.emit('discovery:error', { path, error: discoveryError });
         }
       }
 
-      this.emit('discovery:completed', { type, components: discoveredComponents }); // [cite: 22]
+      this.emit('discovery:completed', { type, components: discoveredComponents });
       this.recordMetric('container.discovery.completed', 1, { type, count: discoveredComponents.size });
       return discoveredComponents;
     } catch (error) {
       const discoveryFailedError = new ServiceError(
-        ErrorCodes.SERVICE.DISCOVERY_FAILED, // [cite: 23]
-        `Failed to discover ${type} components from ${basePath}`, // [cite: 23]
+        ErrorCodes.SERVICE.DISCOVERY_FAILED, // Using unprefixed service code
+        `Failed to discover ${type} components from ${basePath}`,
         { type, basePath, originalMessage: error.message },
         { cause: error }
       );
       await this._handleInternalError(discoveryFailedError, { phase: 'discovery', type });
       this.recordMetric('container.discovery.failed', 1, { type });
-      throw discoveryFailedError; // [cite: 24]
+      throw discoveryFailedError;
     }
   }
 
@@ -195,25 +207,34 @@ export class ContainerSystem extends EventEmitter {
    */
   async loadComponent(path, manifest) {
     try {
-      const config = await this.loadConfig(path); // [cite: 24]
-      if (config.enabled === false) return null; // [cite: 25]
+      const config = await this.loadConfig(path);
+      if (config.enabled === false) return null;
 
       if (manifest.configSchema) {
-        await this.validateConfig(config, manifest.configSchema); // [cite: 25]
+        await this.validateConfig(config, manifest.configSchema);
       }
-      const implementation = await this.loadImplementation(path); // [cite: 25]
-      return { // [cite: 26]
+      const implementation = await this.loadImplementation(path);
+      return {
         name: config.name,
         config,
         implementation,
       };
     } catch (error) {
       // Let discover method handle logging this error via _handleInternalError
-      throw new ConfigError( // [cite: 27]
-        ErrorCodes.CONFIG.LOAD_FAILED, // [cite: 27]
-        `Failed to load component from ${path}`, // [cite: 27]
+      // This throw should be a ConfigError if loading/validation of config part failed,
+      // or ServiceError if implementation load failed.
+      // Since loadConfig and validateConfig throw ConfigError, and loadImplementation throws ServiceError,
+      // we can check the type of error.
+      if (error instanceof ConfigError) {
+          throw error; // Re-throw original ConfigError
+      }
+      // If it's not a ConfigError from loadConfig/validateConfig, then it might be ServiceError from loadImplementation,
+      // or a generic error. Wrap in ConfigError if it's related to the overall component structure/config.
+      throw new ConfigError(
+        ErrorCodes.CONFIG.LOAD_FAILED, // Using unprefixed config code
+        `Failed to load component from ${path}`,
         { path, originalMessage: error.message },
-        { cause: error } // [cite: 28]
+        { cause: error }
       );
     }
   }
@@ -221,69 +242,66 @@ export class ContainerSystem extends EventEmitter {
   /**
    * Get an instance of a component.
    * @param {string} name - Component name.
-   * @param {object} [parentDepsStack=[]] - Used internally to detect circular dependencies.
+   * @param {Array<string>} [parentDepsStack=[]] - Used internally to detect circular dependencies.
    * @returns {Promise<any>} The resolved component instance.
    */
   async resolve(name, parentDepsStack = []) {
     if (!this.components.has(name)) {
-      throw new ServiceError( // [cite: 28]
-        ErrorCodes.SERVICE.UNKNOWN_COMPONENT, // [cite: 28]
-        `Component ${name} is not registered.` // [cite: 29]
+      throw new ServiceError(
+        ErrorCodes.SERVICE.UNKNOWN_COMPONENT, // Using unprefixed service code
+        `Component ${name} is not registered.`
       );
     }
 
     if (parentDepsStack.includes(name)) {
         throw new ConfigError(
-            ErrorCodes.CONFIG.CIRCULAR_DEPENDENCY,
+            ErrorCodes.CONFIG.CIRCULAR_DEPENDENCY, // Using unprefixed config code
             `Circular dependency detected: ${parentDepsStack.join(' -> ')} -> ${name}`
         );
     }
 
-    const { Component, options } = this.components.get(name); // [cite: 29]
+    const { Component, options } = this.components.get(name);
 
-    if (options.singleton && this.instances.has(name)) { // [cite: 30]
-      return this.instances.get(name); // [cite: 30]
+    if (options.singleton && this.instances.has(name)) {
+      return this.instances.get(name);
     }
 
     const currentDepsStack = [...parentDepsStack, name];
-    const componentDepsList = this.dependencies.get(name) || []; // [cite: 31]
-    const resolvedDeps = {}; // [cite: 32]
+    const componentDepsList = this.dependencies.get(name) || [];
+    const resolvedDeps = {};
 
     for (const dep of componentDepsList) {
       if (!this.components.has(dep)) {
         throw new ConfigError(
-            ErrorCodes.CONFIG.MISSING_DEPENDENCY,
+            ErrorCodes.CONFIG.MISSING_DEPENDENCY, // Using unprefixed config code
             `Dependency '${dep}' required by '${name}' is not registered.`
         );
       }
-      resolvedDeps[dep] = await this.resolve(dep, currentDepsStack); // [cite: 32]
+      resolvedDeps[dep] = await this.resolve(dep, currentDepsStack);
     }
 
     let instance;
-    if (typeof Component === 'function') { // [cite: 34]
-      // Check if it's a class constructor (has a prototype and is not an arrow function)
-      if (Component.prototype && typeof Component.prototype.constructor === 'function') { // [cite: 34]
-        instance = new Component(resolvedDeps); // [cite: 34]
+    if (typeof Component === 'function') {
+      if (Component.prototype && typeof Component.prototype.constructor === 'function') {
+        instance = new Component(resolvedDeps);
       } else { // Factory function
-        instance = await Promise.resolve(Component(resolvedDeps)); // [cite: 35]
+        instance = await Promise.resolve(Component(resolvedDeps));
       }
     } else { // Pre-resolved instance
-      instance = Component; // [cite: 36]
+      instance = Component;
     }
 
-    // If container is already initialized and instance has an initialize method, call it.
-    // This handles components resolved after global initialization.
-    if (this.state.status === SYSTEM_STATUS.RUNNING && typeof instance.initialize === 'function') { // [cite: 37]
-      await instance.initialize(); // [cite: 38]
+    if (this.state.status === SYSTEM_STATUS.RUNNING && typeof instance.initialize === 'function') {
+      await instance.initialize();
     }
 
     if (options.singleton) {
-      this.instances.set(name, instance); // [cite: 38]
+      this.instances.set(name, instance);
     }
 
     this.recordMetric('container.components.resolved', 1, { name, singleton: !!options.singleton });
-    this.emit('component:resolved', { name, instance }); // [cite: 39]
-    return instance; // [cite: 40]
+    this.emit('component:resolved', { name, instance });
+    return instance;
   }
 
   /**
@@ -292,46 +310,44 @@ export class ContainerSystem extends EventEmitter {
    */
   async initialize() {
     if (this.state.status === SYSTEM_STATUS.RUNNING || this.state.status === SYSTEM_STATUS.INITIALIZING) {
-      const err = new ServiceError(ErrorCodes.SERVICE.ALREADY_INITIALIZED, 'ContainerSystem is already initialized or initializing.'); // [cite: 40]
+      const err = new CoreError(ErrorCodes.CORE.ALREADY_INITIALIZED, 'ContainerSystem is already initialized or initializing.');
       await this._handleInternalError(err);
-      // Depending on strictness, you might re-throw or just return
       return;
     }
 
     this.emit(LIFECYCLE_EVENTS.INITIALIZING, { system: 'ContainerSystem' });
     this.state.status = SYSTEM_STATUS.INITIALIZING;
     const initStartTime = Date.now();
-    this.state.startTime = initStartTime; // Mark start of initialization process
+    this.state.startTime = initStartTime;
 
     try {
-      const order = this.resolveDependencyOrder(); // [cite: 41]
-      for (const name of order) { // [cite: 42]
-        const instance = await this.resolve(name); // [cite: 42]
-        // The initialize call during resolve handles already-initialized container state.
-        // However, for the main init loop, we ensure it's called if not already.
-        if (this.state.status !== SYSTEM_STATUS.RUNNING && typeof instance.initialize === 'function') { // [cite: 43]
-          // Check instance.initialized or similar if components track their own init state
-          // to avoid double initialization if resolve already did it.
-          // For now, we assume resolve's initialize is for post-container-init resolutions.
-          await instance.initialize(); // [cite: 43]
+      const order = this.resolveDependencyOrder();
+      for (const name of order) {
+        const instance = await this.resolve(name);
+        // Initialize call during resolve handles already-initialized container state.
+        // For main init loop, ensure it's called if not already (resolve might not call it if container not RUNNING yet).
+        if (typeof instance.initialize === 'function') {
+          // Add a check to prevent double initialization if instance tracks its own state
+          // or if resolve now handles init more broadly. For now, assume initialize is safe to call if status isn't RUNNING.
+          if (!instance.state || instance.state.status !== SYSTEM_STATUS.RUNNING) { // Basic check
+             await instance.initialize();
+          }
         }
       }
 
-      //this.initialized = true; // Deprecated, use state.status
       this.state.status = SYSTEM_STATUS.RUNNING;
       const initTime = Date.now() - initStartTime;
       this.recordMetric('container.initialization.time', initTime);
       this.recordMetric('container.initialization.success', 1);
-      this.emit(LIFECYCLE_EVENTS.INITIALIZED, { system: 'ContainerSystem', durationMs: initTime, timestamp: new Date().toISOString() }); // [cite: 44]
+      this.emit(LIFECYCLE_EVENTS.INITIALIZED, { system: 'ContainerSystem', durationMs: initTime, timestamp: new Date().toISOString() });
       this.emit(LIFECYCLE_EVENTS.RUNNING, { system: 'ContainerSystem', timestamp: new Date().toISOString() });
-
-
     } catch (error) {
       this.state.status = SYSTEM_STATUS.ERROR;
       this.recordMetric('container.initialization.failure', 1, { error: error.code });
       await this._handleInternalError(error, { phase: 'initialization' });
-      throw error instanceof ServiceError || error instanceof ConfigError ? error : new ServiceError(
-        ErrorCodes.SERVICE.INITIALIZATION_FAILED, // Generic initialization failure code
+      throw error instanceof ServiceError || error instanceof ConfigError ?
+      error : new ServiceError( // Default wrapper
+        ErrorCodes.SERVICE.OPERATION_FAILED, // Using unprefixed service code
         'ContainerSystem failed to initialize.',
         { originalMessage: error.message },
         { cause: error }
@@ -345,66 +361,66 @@ export class ContainerSystem extends EventEmitter {
    * @returns {Array<string>} Ordered list of component names.
    */
   resolveDependencyOrder() {
-    const visited = new Set(); // [cite: 45]
-    const visiting = new Set(); // To detect circular dependencies [cite: 46]
-    const order = []; // [cite: 46]
+    const visited = new Set();
+    const visiting = new Set();
+    const order = [];
 
     const visit = (name) => {
-      if (visited.has(name)) return; // [cite: 46]
-      if (visiting.has(name)) { // [cite: 47]
-        throw new ConfigError( // [cite: 47]
-          ErrorCodes.CONFIG.CIRCULAR_DEPENDENCY, // [cite: 47]
-          `Circular dependency detected involving: ${name}. Path: ${Array.from(visiting).join(' -> ')} -> ${name}` // [cite: 48]
+      if (visited.has(name)) return;
+      if (visiting.has(name)) {
+        throw new ConfigError(
+          ErrorCodes.CONFIG.CIRCULAR_DEPENDENCY, // Using unprefixed config code
+          `Circular dependency detected involving: ${name}. Path: ${Array.from(visiting).join(' -> ')} -> ${name}`
         );
       }
 
-      visiting.add(name); // [cite: 48]
+      visiting.add(name);
       const componentDefinition = this.components.get(name);
-      if (!componentDefinition) { // Should not happen if called after registration
+      if (!componentDefinition) {
           visiting.delete(name);
-          throw new ConfigError(ErrorCodes.SERVICE.UNKNOWN_COMPONENT, `Component ${name} definition not found while resolving dependency order.`);
+          // This indicates a required dependency was not registered, which should be caught by 'resolve' or prior checks.
+          // If it happens here, it means a component in this.dependencies was not in this.components.
+          throw new ConfigError(
+              ErrorCodes.CONFIG.MISSING_DEPENDENCY, // Using unprefixed config code
+              `Component ${name} definition not found while resolving dependency order (is it registered?).`
+          );
       }
 
-      const deps = this.dependencies.get(name) || []; // [cite: 48]
-      for (const dep of deps) { // [cite: 49]
-        if (!this.components.has(dep)) { // [cite: 49]
-          throw new ConfigError( // [cite: 49]
-            ErrorCodes.CONFIG.MISSING_DEPENDENCY, // [cite: 49]
-            `Dependency ${dep} required by ${name} is not registered.` // [cite: 50]
+      const deps = this.dependencies.get(name) || [];
+      for (const dep of deps) {
+        if (!this.components.has(dep)) {
+          throw new ConfigError(
+            ErrorCodes.CONFIG.MISSING_DEPENDENCY, // Using unprefixed config code
+            `Dependency ${dep} required by ${name} is not registered.`
           );
         }
-        visit(dep); // [cite: 50]
+        visit(dep);
       }
 
-      visiting.delete(name); // [cite: 51]
-      visited.add(name); // [cite: 51]
-      order.push(name); // [cite: 51]
+      visiting.delete(name);
+      visited.add(name);
+      order.push(name);
     };
 
-    // Prioritize specific core systems if they are present
-    // This is a common pattern but can be made more dynamic if needed
-    const prioritizedOrder = this.deps.config?.container?.initOrder || [ // [cite: 51]
-      'errorSystem', // Error system should ideally be first
-      'config',      // Config service if it's a component
+    const prioritizedOrder = this.deps.config?.container?.initOrder || [
+      'errorSystem',
+      'config',
       'eventBusSystem',
       'moduleSystem',
       'routerSystem'
-      // other essential systems
     ];
-
     for (const name of prioritizedOrder) {
-      if (this.components.has(name) && !visited.has(name)) { // [cite: 52]
-        visit(name); // [cite: 53]
+      if (this.components.has(name) && !visited.has(name)) {
+        visit(name);
       }
     }
 
-    // Visit any remaining components
-    for (const name of this.components.keys()) { // [cite: 53]
-      if (!visited.has(name)) { // Check !visited instead of !order.includes
-        visit(name); // [cite: 54]
+    for (const name of this.components.keys()) {
+      if (!visited.has(name)) {
+        visit(name);
       }
     }
-    return order; // [cite: 55]
+    return order;
   }
 
   /**
@@ -418,50 +434,43 @@ export class ContainerSystem extends EventEmitter {
     this.emit(LIFECYCLE_EVENTS.SHUTTING_DOWN, { system: 'ContainerSystem' });
     this.state.status = SYSTEM_STATUS.SHUTTING_DOWN;
     const shutdownStartTime = Date.now();
-
     try {
-      // Resolve order again in case components were added/removed, though ideally not after init.
-      // It's safer to use the order from last successful initialization if available and unchanged.
-      // For simplicity, we re-resolve. Or, store the init order.
-      const order = this.resolveDependencyOrder().reverse(); // [cite: 55]
+      const order = this.resolveDependencyOrder().reverse();
 
-      for (const name of order) { // [cite: 56]
-        const instance = this.instances.get(name); // [cite: 56]
-        if (instance && typeof instance.shutdown === 'function') { // [cite: 57]
+      for (const name of order) {
+        const instance = this.instances.get(name);
+        if (instance && typeof instance.shutdown === 'function') {
           try {
-            await instance.shutdown(); // [cite: 57]
+            await instance.shutdown();
           } catch (error) {
             const shutdownError = new ServiceError(
-                ErrorCodes.SERVICE.SHUTDOWN_FAILED, // Assuming an appropriate code
+                ErrorCodes.SERVICE.OPERATION_FAILED, // Using unprefixed service code
                 `Error shutting down component ${name}`,
                 { component: name, originalMessage: error.message },
                 { cause: error }
             );
             await this._handleInternalError(shutdownError, { phase: 'shutdown-component', component: name });
-            this.emit('shutdown:error', { component: name, error: shutdownError }); // [cite: 58]
+            this.emit('shutdown:error', { component: name, error: shutdownError });
             // Continue shutting down other components
           }
         }
       }
 
-      this.instances.clear(); // [cite: 59]
-      // this.components.clear(); // Typically components are not cleared on shutdown, only instances.
-      // this.dependencies.clear();
-      // this.manifests.clear();
-      // this.initialized = false; // Deprecated
+      this.instances.clear();
       this.state.status = SYSTEM_STATUS.SHUTDOWN;
-      this.state.startTime = null; // Clear start time as it's no longer running
+      this.state.startTime = null;
       const shutdownTime = Date.now() - shutdownStartTime;
       this.recordMetric('container.shutdown.time', shutdownTime);
       this.recordMetric('container.shutdown.success', 1);
-      this.emit(LIFECYCLE_EVENTS.SHUTDOWN, { system: 'ContainerSystem', durationMs: shutdownTime, timestamp: new Date().toISOString() }); // [cite: 60]
+      this.emit(LIFECYCLE_EVENTS.SHUTDOWN, { system: 'ContainerSystem', durationMs: shutdownTime, timestamp: new Date().toISOString() });
 
     } catch (error) {
       this.state.status = SYSTEM_STATUS.ERROR;
       this.recordMetric('container.shutdown.failure', 1, { error: error.code });
       await this._handleInternalError(error, { phase: 'shutdown' });
-      throw error instanceof ServiceError || error instanceof ConfigError ? error : new ServiceError(
-        ErrorCodes.SERVICE.SHUTDOWN_FAILED,
+      throw error instanceof ServiceError || error instanceof ConfigError ?
+      error : new ServiceError( // Default wrapper
+        ErrorCodes.SERVICE.OPERATION_FAILED, // Using unprefixed service code
         'ContainerSystem failed to shutdown.',
         { originalMessage: error.message },
         { cause: error }
@@ -469,32 +478,32 @@ export class ContainerSystem extends EventEmitter {
     }
   }
 
-  // --- Discovery and Loading Methods (largely from original, with minor error handling adjustments) ---
+  // --- Discovery and Loading Methods ---
 
   /**
    * Scan a directory for component files.
    * @private
    */
-  async scanDirectory(basePath) { // [cite: 60]
+  async scanDirectory(basePath) {
     try {
-      const entries = await readdir(basePath, { withFileTypes: true }); // [cite: 61]
-      const files = []; // [cite: 62]
+      const entries = await readdir(basePath, { withFileTypes: true });
+      const files = [];
 
-      for (const entry of entries) { // [cite: 62]
-        const fullPath = join(basePath, entry.name); // [cite: 62]
-        if (entry.isDirectory()) { // [cite: 63]
-          files.push(...await this.scanDirectory(fullPath)); // [cite: 64]
-        } else if (entry.isFile() && (entry.name.endsWith('.js') || entry.name.endsWith('.mjs') || entry.name.endsWith('.cjs'))) { // [cite: 64]
-          files.push(fullPath); // [cite: 65]
+      for (const entry of entries) {
+        const fullPath = join(basePath, entry.name);
+        if (entry.isDirectory()) {
+          files.push(...await this.scanDirectory(fullPath));
+        } else if (entry.isFile() && (entry.name.endsWith('.js') || entry.name.endsWith('.mjs') || entry.name.endsWith('.cjs'))) {
+          files.push(fullPath);
         }
       }
-      return files; // [cite: 66]
+      return files;
     } catch (error) {
-      throw new ServiceError( // [cite: 66]
-        ErrorCodes.SERVICE.DIRECTORY_SCAN_FAILED, // [cite: 66]
-        `Failed to scan directory: ${basePath}`, // [cite: 67]
+      throw new ServiceError(
+        ErrorCodes.SERVICE.DIRECTORY_SCAN_FAILED, // Using unprefixed service code
+        `Failed to scan directory: ${basePath}`,
         { basePath, originalMessage: error.message },
-        { cause: error } // [cite: 67]
+        { cause: error }
       );
     }
   }
@@ -503,41 +512,34 @@ export class ContainerSystem extends EventEmitter {
    * Load component configuration from a file path or embedded in component.
    * @private
    */
-  async loadConfig(path) { // [cite: 67]
+  async loadConfig(path) {
     try {
-      const dir = dirname(path); // [cite: 68]
-      const filename = basename(path, '.js'); // Assuming .js, adjust if other extensions are primary [cite: 68]
-      // Consider .mjs, .cjs too if `filename` is used for more than just config name
-      const configPathJs = join(dir, `${filename}.config.js`); // [cite: 69]
-      // Add checks for .mjs, .cjs config files if needed
-      // const configPathMjs = join(dir, `${filename}.config.mjs`);
-      // const configPathCjs = join(dir, `${filename}.config.cjs`);
+      const dir = dirname(path);
+      const filename = basename(path, '.js');
+      const configPathJs = join(dir, `${filename}.config.js`);
 
       let actualConfigPath;
       if (existsSync(configPathJs)) actualConfigPath = configPathJs;
-      // else if (existsSync(configPathMjs)) actualConfigPath = configPathMjs;
-      // else if (existsSync(configPathCjs)) actualConfigPath = configPathCjs;
 
-      if (actualConfigPath) { // [cite: 69]
-        const configModule = await import(actualConfigPath); // [cite: 69]
-        return configModule.default || configModule; // [cite: 70]
+      if (actualConfigPath) {
+        const configModule = await import(actualConfigPath);
+        return configModule.default || configModule;
       }
 
-      // Fallback: try to extract config from the component file itself
-      const componentModule = await import(path); // [cite: 70]
-      if (componentModule.config) { // [cite: 71]
+      const componentModule = await import(path);
+      if (componentModule.config) {
         return typeof componentModule.config === 'function'
-          ? await Promise.resolve(componentModule.config()) // Handle async config functions [cite: 71]
-          : componentModule.config; // [cite: 72]
+          ? await Promise.resolve(componentModule.config())
+          : componentModule.config;
       }
 
-      return { name: filename, enabled: true }; // Default config [cite: 73]
+      return { name: filename, enabled: true }; // Default config
     } catch (error) {
-      throw new ConfigError( // [cite: 74]
-        ErrorCodes.CONFIG.LOAD_FAILED, // [cite: 74]
-        `Failed to load configuration from/for ${path}`, // [cite: 75]
+      throw new ConfigError(
+        ErrorCodes.CONFIG.LOAD_FAILED, // Using unprefixed config code
+        `Failed to load configuration from/for ${path}`,
         { path, originalMessage: error.message },
-        { cause: error } // [cite: 75]
+        { cause: error }
       );
     }
   }
@@ -546,42 +548,42 @@ export class ContainerSystem extends EventEmitter {
    * Validate component configuration against a schema.
    * @private
    */
-  async validateConfig(config, schema) { // [cite: 75]
-    if (!schema) return true; // [cite: 75]
+  async validateConfig(config, schema) {
+    if (!schema) return true;
 
     try {
-      if (!config || typeof config !== 'object') { // [cite: 76]
-        throw new ConfigError(ErrorCodes.CONFIG.INVALID_CONFIG, 'Configuration must be an object.'); // [cite: 77]
+      if (!config || typeof config !== 'object') {
+        throw new ConfigError(ErrorCodes.CONFIG.INVALID_CONFIG_OBJECT, 'Configuration must be an object.'); // Using unprefixed
       }
 
-      for (const [key, fieldSchema] of Object.entries(schema)) { // [cite: 77]
-        if (fieldSchema.required && (config[key] === undefined || config[key] === null)) { // [cite: 77]
-          throw new ConfigError(ErrorCodes.CONFIG.MISSING_REQUIRED_FIELD, `Required field '${key}' is missing.`, { field: key }); // [cite: 78]
+      for (const [key, fieldSchema] of Object.entries(schema)) {
+        if (fieldSchema.required && (config[key] === undefined || config[key] === null)) {
+          throw new ConfigError(ErrorCodes.CONFIG.MISSING_REQUIRED_FIELD, `Required field '${key}' is missing.`, { field: key }); // Using unprefixed
         }
-        if (config[key] === undefined) continue; // [cite: 79]
+        if (config[key] === undefined) continue;
 
-        if (fieldSchema.type && typeof config[key] !== fieldSchema.type) { // [cite: 79]
-          throw new ConfigError(ErrorCodes.CONFIG.INVALID_FIELD_TYPE, `Field '${key}' expects type '${fieldSchema.type}', got '${typeof config[key]}'.`, { field: key, expected: fieldSchema.type, actual: typeof config[key] }); // [cite: 80]
+        if (fieldSchema.type && typeof config[key] !== fieldSchema.type) {
+          throw new ConfigError(ErrorCodes.CONFIG.INVALID_FIELD_TYPE, `Field '${key}' expects type '${fieldSchema.type}', got '${typeof config[key]}'.`, { field: key, expected: fieldSchema.type, actual: typeof config[key] }); // Using unprefixed
         }
-        if (fieldSchema.enum && !fieldSchema.enum.includes(config[key])) { // [cite: 80]
-          throw new ConfigError(ErrorCodes.CONFIG.INVALID_ENUM_VALUE, `Field '${key}' value '${config[key]}' not in enum [${fieldSchema.enum.join(', ')}].`, { field: key, expected: fieldSchema.enum, actual: config[key] }); // [cite: 81]
+        if (fieldSchema.enum && !fieldSchema.enum.includes(config[key])) {
+          throw new ConfigError(ErrorCodes.CONFIG.INVALID_ENUM_VALUE, `Field '${key}' value '${config[key]}' not in enum [${fieldSchema.enum.join(', ')}].`, { field: key, expected: fieldSchema.enum, actual: config[key] }); // Using unprefixed
         }
-        if (fieldSchema.pattern && !new RegExp(fieldSchema.pattern).test(config[key])) { // [cite: 81]
-          throw new ConfigError(ErrorCodes.CONFIG.PATTERN_MISMATCH, `Field '${key}' does not match pattern '${fieldSchema.pattern}'.`, { field: key, pattern: fieldSchema.pattern, value: config[key] }); // [cite: 82]
+        if (fieldSchema.pattern && !new RegExp(fieldSchema.pattern).test(config[key])) {
+          throw new ConfigError(ErrorCodes.CONFIG.PATTERN_MISMATCH, `Field '${key}' does not match pattern '${fieldSchema.pattern}'.`, { field: key, pattern: fieldSchema.pattern, value: config[key] }); // Using unprefixed
         }
       }
 
-      if (typeof schema._validate === 'function') { // [cite: 82]
-        await schema._validate(config); // [cite: 83]
+      if (typeof schema._validate === 'function') {
+        await schema._validate(config);
       }
-      return true; // [cite: 84]
+      return true;
     } catch (error) {
-      if (error instanceof ConfigError) throw error; // [cite: 84]
-      throw new ConfigError( // [cite: 85]
-        ErrorCodes.CONFIG.VALIDATION_FAILED, // [cite: 86]
+      if (error instanceof ConfigError) throw error;
+      throw new ConfigError(
+        ErrorCodes.CONFIG.VALIDATION_FAILED, // Using unprefixed config code
         'Configuration validation failed.',
         { config, schemaExcerpt: Object.keys(schema), originalMessage: error.message },
-        { cause: error } // [cite: 86]
+        { cause: error }
       );
     }
   }
@@ -590,33 +592,31 @@ export class ContainerSystem extends EventEmitter {
    * Load component implementation from a file path.
    * @private
    */
-  async loadImplementation(path) { // [cite: 86]
+  async loadImplementation(path) {
     try {
-      const module = await import(path); // [cite: 87]
-      const filename = basename(path, '.js'); // [cite: 87] // Consider other extensions if needed
+      const module = await import(path);
+      const filename = basename(path, '.js');
 
-      if (module.default) return module.default; // [cite: 89]
-      if (module[filename]) return module[filename]; // [cite: 90]
+      if (module.default) return module.default;
+      if (module[filename]) return module[filename];
 
-      for (const exportValue of Object.values(module)) { // Iterate values for broader check
+      for (const exportValue of Object.values(module)) {
         if (typeof exportValue === 'function') {
-          // Prioritize classes or well-named factory functions
-          if (exportValue.prototype || exportValue.name?.startsWith('create')) { // [cite: 91]
+          if (exportValue.prototype || exportValue.name?.startsWith('create')) {
             return exportValue;
           }
         }
       }
-      // If no clear main export, and only one export exists, return that.
       const exports = Object.values(module);
       if (exports.length === 1) return exports[0];
 
-      return module; // Fallback to the whole module object [cite: 93]
+      return module; // Fallback to the whole module object
     } catch (error) {
-      throw new ServiceError( // [cite: 93]
-        ErrorCodes.SERVICE.IMPLEMENTATION_LOAD_FAILED, // [cite: 94]
-        `Failed to load implementation from ${path}`, // [cite: 94]
+      throw new ServiceError(
+        ErrorCodes.SERVICE.IMPLEMENTATION_LOAD_FAILED, // Using unprefixed service code
+        `Failed to load implementation from ${path}`,
         { path, originalMessage: error.message },
-        { cause: error } // [cite: 94]
+        { cause: error }
       );
     }
   }
@@ -636,7 +636,10 @@ export class ContainerSystem extends EventEmitter {
 
   registerHealthCheck(name, checkFn) {
     if (typeof checkFn !== 'function') {
-        const err = new ConfigError(ErrorCodes.CORE.INVALID_HANDLER, `Health check '${name}' must be a function.`);
+        const err = new ConfigError(
+            ErrorCodes.CONFIG.VALIDATION_FAILED, // Using unprefixed config code
+            `Health check '${name}' must be a function.`
+        );
         this._handleInternalError(err); // Log, but rethrow as it's a programming error
         throw err;
     }
@@ -652,7 +655,8 @@ export class ContainerSystem extends EventEmitter {
         const checkResult = await checkFn();
         results[name] = checkResult;
         if (checkResult.status !== SYSTEM_STATUS.HEALTHY) {
-          overallStatus = (overallStatus === SYSTEM_STATUS.HEALTHY) ? SYSTEM_STATUS.DEGRADED : SYSTEM_STATUS.UNHEALTHY;
+          overallStatus = (overallStatus === SYSTEM_STATUS.HEALTHY) ?
+          SYSTEM_STATUS.DEGRADED : SYSTEM_STATUS.UNHEALTHY;
           if (checkResult.status === SYSTEM_STATUS.UNHEALTHY) overallStatus = SYSTEM_STATUS.UNHEALTHY;
         }
       } catch (error) {
@@ -673,7 +677,7 @@ export class ContainerSystem extends EventEmitter {
 
   async checkSystemState() {
     return createStandardHealthCheckResult(
-      this.state.status === SYSTEM_STATUS.RUNNING ? SYSTEM_STATUS.HEALTHY : SYSTEM_STATUS.UNHEALTHY,
+      this.state.status === SYSTEM_STATUS.RUNNING ? SYSTEM_STATUS.HEALTHY : (this.state.status === SYSTEM_STATUS.CREATED || this.state.status === SYSTEM_STATUS.INITIALIZING ? SYSTEM_STATUS.DEGRADED : SYSTEM_STATUS.UNHEALTHY ),
       {
         currentStatus: this.state.status,
         uptime: this.state.startTime ? Date.now() - this.state.startTime : 0,
@@ -687,8 +691,6 @@ export class ContainerSystem extends EventEmitter {
       registeredComponentCount: this.components.size,
       resolvedInstanceCount: this.instances.size,
       manifestCount: this.manifests.size,
-      // Optionally list names if not too verbose for health check
-      // registeredComponents: Array.from(this.components.keys()),
     });
   }
 

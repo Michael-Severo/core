@@ -3,7 +3,7 @@
  * @description Defines errors related to data validation.
  */
 
-import { CoreError } from '../CoreError.js'; // [cite: 389]
+import { CoreError } from '../CoreError.js'; // [cite: 2102]
 
 /**
  * Represents an error that occurs when input data fails validation.
@@ -13,17 +13,19 @@ import { CoreError } from '../CoreError.js'; // [cite: 389]
 export class ValidationError extends CoreError {
   /**
    * Creates a new ValidationError instance.
-   * @param {string} code - A specific error code for the validation issue (e.g., 'INVALID_INPUT', 'SCHEMA_MISMATCH').
+   * The constructor will prepend "VALIDATION_" to the provided specific code.
+   * @param {string} code - A specific, **unprefixed** error code from `ErrorCodes.VALIDATION` (e.g., 'INVALID_INPUT', 'SCHEMA_MISMATCH').
    * @param {string} message - A human-readable description of the error.
    * @param {object} [details={}] - Additional details, expected to contain a `validationErrors` array.
    * @param {Array<object>} [details.validationErrors=[]] - An array of specific validation failure objects (e.g., { field, message }).
    * @param {object} [options={}] - Additional error options, including 'cause'.
    */
   constructor(code, message, details = {}, options = {}) {
-    super(`VALIDATION_${code}`, message, details, options); // [cite: 390]
-    this.statusCode = 400; // [cite: 390]
+    super(`VALIDATION_${code}`, message, details, options); // [cite: 2110]
+    this.name = 'ValidationError';
+    this.statusCode = 400; // [cite: 2110]
     // Ensure validationErrors is always an array, even if not provided or malformed in details.
-    this.validationErrors = Array.isArray(details?.validationErrors) ? details.validationErrors : []; // [cite: 391]
+    this.validationErrors = Array.isArray(details?.validationErrors) ? details.validationErrors : []; // [cite: 2111]
   }
 
   /**
@@ -32,7 +34,7 @@ export class ValidationError extends CoreError {
    */
   toJSON() {
     const json = super.toJSON(); //
-    json.validationErrors = this.validationErrors; // [cite: 392]
+    json.validationErrors = this.validationErrors; // [cite: 2114]
     return json;
   }
 
@@ -43,9 +45,10 @@ export class ValidationError extends CoreError {
    * @returns {ValidationError} An instance of ValidationError.
    */
   static fromJSON(data) {
-    const errorInstance = super.fromJSON(data, ValidationError); // Pass ValidationError as the type
+    const errorInstance = super.fromJSON(data, ValidationError); // [cite: 2117]
+    // Pass ValidationError as the type
     // Ensure validationErrors is an array after deserialization.
-    errorInstance.validationErrors = Array.isArray(data?.validationErrors) ? data.validationErrors : []; // [cite: 393]
+    errorInstance.validationErrors = Array.isArray(data?.validationErrors) ? data.validationErrors : []; // [cite: 2118]
     return errorInstance;
   }
 }

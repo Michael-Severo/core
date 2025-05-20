@@ -5,7 +5,7 @@
  */
 
 import { CoreModule } from '../module/CoreModule.js';
-import { RouterError } from '../errors/types/RouterError.js'; // Assuming this is in types/RouterError.js
+import { RouterError, ModuleError } from '../errors/index.js'; // Combined import
 import { ErrorCodes } from '../errors/ErrorCodes.js';
 import { SYSTEM_STATUS } from '../common/SystemConstants.js'; // For checking module state
 
@@ -29,7 +29,8 @@ export class RoutableModule extends CoreModule {
   /**
    * Registers an HTTP route.
    * If the module is already initialized and running, it attempts to register immediately
-   * by emitting an event. Otherwise, stores the route for batch registration during onInitialize.
+   * by emitting an event.
+   * Otherwise, stores the route for batch registration during onInitialize.
    *
    * @param {string} method - HTTP method (e.g., 'GET', 'POST').
    * @param {string} path - Route path (e.g., '/users/:id').
@@ -39,39 +40,33 @@ export class RoutableModule extends CoreModule {
    */
   registerRoute(method, path, handler, options = {}) { //
     if (!method || typeof method !== 'string' || !method.trim()) {
-      // Use this.handleError for operational errors that are recoverable or need logging by the module
-      // For programming errors like invalid arguments, throwing directly is often better.
-      throw new RouterError(ErrorCodes.ROUTER.INVALID_METHOD, `${this.constructor.name}: Route method must be a non-empty string.`); //
+      throw new RouterError(ErrorCodes.ROUTER.INVALID_METHOD, `${this.constructor.name}: Route method must be a non-empty string.`); // Uses unprefixed
     }
     if (!path || typeof path !== 'string' || !path.trim()) {
-      throw new RouterError(ErrorCodes.ROUTER.INVALID_PATH, `${this.constructor.name}: Route path must be a non-empty string.`); //
+      throw new RouterError(ErrorCodes.ROUTER.INVALID_PATH, `${this.constructor.name}: Route path must be a non-empty string.`); // Uses unprefixed
     }
     if (typeof handler !== 'function') {
-      throw new RouterError(ErrorCodes.ROUTER.INVALID_HANDLER, `${this.constructor.name}: Route handler for ${method} ${path} must be a function.`); //
+      throw new RouterError(ErrorCodes.ROUTER.INVALID_HANDLER, `${this.constructor.name}: Route handler for ${method} ${path} must be a function.`); // Uses unprefixed
     }
 
     const routeDefinition = {
       method: method.toUpperCase(), //
       path, //
-      handler: handler.bind(this), // Ensure 'this' context is the module instance [cite: 1054]
+      handler: handler.bind(this), // Ensure 'this' context is the module instance //
       options: options || {}, //
     };
 
-    this.routes.push(routeDefinition); // [cite: 1054]
-    this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.defined`, 1, { method: routeDefinition.method, path });
-
-    // If module is already running, emit event for immediate registration by RouterSystem
-    // This relies on eventBus being available and RouterSystem listening.
-    if (this.state.status === SYSTEM_STATUS.RUNNING && this.eventBus) { // [cite: 1055]
+    this.routes.push(routeDefinition); //
+    this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.defined`, 1, { method: routeDefinition.method, path }); //
+    if (this.state.status === SYSTEM_STATUS.RUNNING && this.eventBus) { //
       this._emitRouteRegistration(routeDefinition)
           .catch(error => {
-              // Error during immediate emission, log it via module's error handler
               this.handleError(new RouterError(
-                  ErrorCodes.ROUTER.ROUTE_REGISTRATION_FAILED,
+                  ErrorCodes.ROUTER.ROUTE_REGISTRATION_FAILED, // Uses unprefixed
                   `${this.constructor.name}: Failed to emit immediate registration for ${routeDefinition.method} ${routeDefinition.path}.`,
                   { method: routeDefinition.method, path: routeDefinition.path, originalMessage: error.message },
                   { cause: error }
-              ), { phase: 'immediate-route-registration' });
+              ), { phase: 'immediate-route-registration' }); //
           });
     }
     return this; //
@@ -83,16 +78,14 @@ export class RoutableModule extends CoreModule {
    */
   async _emitRouteRegistration(routeDefinition) {
     if (!this.eventBus) {
-        // This might happen if eventBus wasn't ready when module was initialized.
-        // The route is stored in this.routes and will be registered by registerAllRoutes later.
-        console.warn(`[${this.constructor.name}] EventBus not available for emitting route: ${routeDefinition.method} ${routeDefinition.path}. It will be registered during batch registration.`);
-        return;
+        this.deps.logger.warn(`[${this.constructor.name}] EventBus not available for emitting route: ${routeDefinition.method} ${routeDefinition.path}. It will be registered during batch registration.`); //
+        return; //
     }
-    await this.eventBus.emit('router.route.register', { // [cite: 1058]
+    await this.eventBus.emit('router.route.register', { //
       moduleId: this.constructor.name, //
       ...routeDefinition, // Spreads method, path, handler, options
     }); //
-    this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.emitted_for_registration`, 1, { method: routeDefinition.method, path: routeDefinition.path });
+    this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.emitted_for_registration`, 1, { method: routeDefinition.method, path: routeDefinition.path }); //
   }
 
 
@@ -107,14 +100,14 @@ export class RoutableModule extends CoreModule {
    */
   registerVersionedRoute(version, method, path, handler, options = {}) { //
     if (!version || (typeof version !== 'string' && typeof version !== 'number')) {
-        throw new RouterError(ErrorCodes.ROUTER.INVALID_API_VERSION || 'INVALID_API_VERSION', `${this.constructor.name}: API version must be a non-empty string or number.`);
+        throw new RouterError(ErrorCodes.ROUTER.INVALID_API_VERSION, `${this.constructor.name}: API version must be a non-empty string or number.`); // Uses unprefixed
     }
     const basePath = path.startsWith('/') ? path : `/${path}`; //
     const versionedPath = `/api/v${version}${basePath}`; //
     return this.registerRoute(method, versionedPath, handler, { //
       ...options, //
       apiVersion: version, // Add version to options for RouterSystem/Adapter use
-    });
+    }); //
   }
 
   /**
@@ -125,71 +118,67 @@ export class RoutableModule extends CoreModule {
   async registerAllRoutes() { //
     if (!this.eventBus) {
       await this.handleError(new ModuleError(
-          ErrorCodes.MODULE.DEPENDENCY_NOT_READY,
+          ErrorCodes.MODULE.DEPENDENCY_NOT_READY, // Uses unprefixed
           `${this.constructor.name}: EventBus is not available for registering routes. Ensure EventBusSystem is initialized.`,
           { moduleName: this.constructor.name }
-      ), { phase: 'registerAllRoutes' });
-      // Do not throw here, as this might be called during initialization where eventBus could be late.
-      // Routes remain in this.routes and can be registered later if a mechanism is added.
-      return;
+      ), { phase: 'registerAllRoutes' }); //
+      return; //
     }
 
-    let successfulEmissions = 0;
+    let successfulEmissions = 0; //
     for (const route of this.routes) { //
       try {
         await this._emitRouteRegistration(route); //
-        successfulEmissions++;
+        successfulEmissions++; //
       } catch (error) {
-        // Error during batch emission, log it and continue with others
         await this.handleError(new RouterError(
-            ErrorCodes.ROUTER.ROUTE_REGISTRATION_FAILED,
+            ErrorCodes.ROUTER.ROUTE_REGISTRATION_FAILED, // Uses unprefixed
             `${this.constructor.name}: Failed to emit registration for ${route.method} ${route.path} during batch.`,
             { method: route.method, path: route.path, originalMessage: error.message },
             { cause: error }
-        ), { phase: 'batch-route-registration' });
+        ), { phase: 'batch-route-registration' }); //
       }
     }
-    this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.batch_emitted`, successfulEmissions, { totalDefined: this.routes.length });
+    this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.batch_emitted`, successfulEmissions, { totalDefined: this.routes.length }); //
   }
 
   /**
    * Unregisters a previously registered route by emitting an event.
    * @param {string} method - HTTP method.
    * @param {string} path - Route path.
-   * @returns {Promise<boolean>} True if the unregistration event was emitted, false if route not found locally.
+   * @returns {Promise<boolean>} True if the unregistration event was emitted, false if route not found locally or emit failed.
    */
   async unregisterRoute(method, path) { //
     const upperMethod = method.toUpperCase(); //
     const index = this.routes.findIndex(r => r.method === upperMethod && r.path === path); //
 
-    if (index === -1) { // [cite: 1069]
-      this.deps.logger?.warn(`[${this.constructor.name}] Route ${upperMethod} ${path} not found locally for unregistration.`);
+    if (index === -1) { //
+      this.deps.logger?.warn(`[${this.constructor.name}] Route ${upperMethod} ${path} not found locally for unregistration.`); //
       return false; //
     }
 
     this.routes.splice(index, 1); //
-    this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.removed_local`, 1, { method: upperMethod, path });
-
+    this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.removed_local`, 1, { method: upperMethod, path }); //
     if (this.state.status === SYSTEM_STATUS.RUNNING && this.eventBus) { //
       try {
         await this.eventBus.emit('router.route.unregister', { //
           moduleId: this.constructor.name, //
           method: upperMethod, //
           path, //
-        });
-        this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.emitted_for_unregistration`, 1, { method: upperMethod, path });
+        }); //
+        this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.emitted_for_unregistration`, 1, { method: upperMethod, path }); //
         return true; //
       } catch (error) {
          await this.handleError(new RouterError(
-            ErrorCodes.ROUTER.ROUTE_UNREGISTRATION_FAILED || 'ROUTE_UNREGISTRATION_FAILED',
+            ErrorCodes.ROUTER.ROUTE_UNREGISTRATION_FAILED, // Uses unprefixed
             `${this.constructor.name}: Failed to emit unregistration for ${upperMethod} ${path}.`,
             { method: upperMethod, path: path, originalMessage: error.message },
             { cause: error }
-        ), { phase: 'route-unregistration' });
-        return false; // Emission failed
+        ), { phase: 'route-unregistration' }); //
+        return false; // Emission failed //
       }
     }
-    return true; // Removed locally, but not emitted if module not running or no eventBus
+    return true; // Removed locally, but not emitted if module not running or no eventBus //
   }
 
   // --- CoreModule Lifecycle Overrides ---
@@ -198,8 +187,8 @@ export class RoutableModule extends CoreModule {
    * Registers a health check for the routes defined by this module.
    * This is called by CoreModule's `setupHealthChecks`.
    */
-  async onSetupHealthChecks() { // // (Hook from CoreModule)
-    await super.onSetupHealthChecks(); // Call CoreModule's hook first
+  async onSetupHealthChecks() { //
+    await super.onSetupHealthChecks(); //
     this.registerHealthCheck(`${this.constructor.name.toLowerCase()}.routes`, async () => { //
       return createStandardHealthCheckResult(SYSTEM_STATUS.HEALTHY, { //
         count: this.routes.length, //
@@ -211,33 +200,32 @@ export class RoutableModule extends CoreModule {
   /**
    * Hook into CoreModule's initialization to register all defined routes.
    */
-  async onInitialize() { // // (Hook from CoreModule)
-    await super.onInitialize(); // Call CoreModule's initialization logic first
-    // Register all routes that might have been defined before eventBus was ready or if not using immediate registration
+  async onInitialize() { //
+    await super.onInitialize(); //
     await this.registerAllRoutes(); //
   }
 
   /**
    * Hook into CoreModule's shutdown to signal unregistration of all this module's routes.
    */
-  async onShutdown() { // // (Hook from CoreModule)
+  async onShutdown() { //
     if (this.state.status === SYSTEM_STATUS.RUNNING && this.eventBus) { // Check if it was running
       try {
-        await this.eventBus.emit('router.module.unregister', { // [cite: 1075]
+        await this.eventBus.emit('router.module.unregister', { //
           moduleId: this.constructor.name, //
-        });
-        this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.all_emitted_for_unregistration`, 1);
+        }); //
+        this.recordMetric(`${this.constructor.name.toLowerCase()}.routes.all_emitted_for_unregistration`, 1); //
       } catch (error) {
         await this.handleError(new RouterError(
-            ErrorCodes.ROUTER.MODULE_UNREGISTRATION_FAILED || 'MODULE_UNREGISTRATION_FAILED',
+            ErrorCodes.ROUTER.MODULE_UNREGISTRATION_FAILED, // Uses unprefixed
             `${this.constructor.name}: Failed to emit module route unregistration event.`,
             { moduleId: this.constructor.name, originalMessage: error.message },
             { cause: error }
-        ), { phase: 'module-routes-unregistration' });
+        ), { phase: 'module-routes-unregistration' }); //
       }
     }
-    this.routes = []; // Clear local route definitions [cite: 1076]
-    await super.onShutdown(); // Call CoreModule's shutdown logic last
+    this.routes = []; //
+    await super.onShutdown(); //
   }
 }
 
@@ -247,11 +235,5 @@ export class RoutableModule extends CoreModule {
  * @returns {RoutableModule}
  */
 export function createRoutableModule(deps = {}) { //
-  // CoreModule's factory (createModule) already handles default dependencies for errorSystem, eventBusSystem, config.
-  // So, we can just pass deps through.
   return new RoutableModule(deps); //
 }
-
-// Default export of an object containing the class and factory was present in original file.
-// For ES Modules, named exports are generally preferred.
-// export default { RoutableModule, createRoutableModule };

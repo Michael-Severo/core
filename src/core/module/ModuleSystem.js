@@ -4,54 +4,48 @@
  */
 
 import { EventEmitter } from 'events';
-import { CoreModule } from './CoreModule.js'; //
-import { ModuleError, ValidationError } from '../errors/index.js'; //
+import { CoreModule } from './CoreModule.js';
+import { ModuleError, ValidationError, CoreError } from '../errors/index.js';
 import { ErrorCodes } from '../errors/ErrorCodes.js';
 import { SYSTEM_STATUS, LIFECYCLE_EVENTS, DEFAULT_CONFIG } from '../common/SystemConstants.js';
 import { safeHandleError, createStandardHealthCheckResult } from '../common/ErrorUtils.js';
 
 export class ModuleSystem extends EventEmitter {
-  static dependencies = ['errorSystem', 'eventBusSystem', 'config']; // [cite: 825]
-  static version = '2.0.0'; // Example version bump
+  static dependencies = ['errorSystem', 'eventBusSystem', 'config', 'containerSystem']; // Added containerSystem
+  static version = '2.0.0';
 
   /**
    * Creates a new ModuleSystem instance.
    * @param {object} [deps={}] - Dependencies for the ModuleSystem.
-   * @param {object} [deps.errorSystem] - The ErrorSystem instance.
-   * @param {object} [deps.eventBusSystem] - The EventBusSystem instance.
+   * @param {object} deps.errorSystem - The ErrorSystem instance.
+   * @param {object} deps.eventBusSystem - The EventBusSystem instance.
    * @param {object} [deps.config={}] - Global configuration.
+   * @param {object} deps.containerSystem - The main ContainerSystem instance.
    */
-  constructor(deps = {}) { // Constructor now uses deps = {}
+  constructor(deps = {}) {
     super();
-    this.deps = { // Ensure all declared dependencies are at least null or an empty object
+    this.deps = {
       errorSystem: deps.errorSystem,
       eventBusSystem: deps.eventBusSystem,
       config: deps.config || {},
+      containerSystem: deps.containerSystem, // Store containerSystem
       ...deps
     };
 
-    this.modules = new Map(); // [cite: 826]
-    // this.initialized is driven by this.state.status
-
-    // Attempt to get eventBus instance early
-    try {
-        this.eventBus = this.deps.eventBusSystem?.getEventBus(); // [cite: 827]
-    } catch(e) {
-        this.eventBus = null; // Will be re-fetched in initialize
-    }
-
+    this.modules = new Map();
+    this.eventBus = null;
 
     this.state = {
       status: SYSTEM_STATUS.CREATED,
       startTime: null,
-      errors: [], // For internal errors of ModuleSystem itself
+      errors: [],
       metrics: new Map(),
-      moduleHealth: new Map(), // Stores last known health of each module [cite: 828]
-      healthCheckIntervals: new Map(), // Tracks intervals for health monitoring [cite: 828]
-      healthChecks: new Map(), // Health checks for ModuleSystem itself
+      moduleHealth: new Map(),
+      healthCheckIntervals: new Map(),
+      healthChecks: new Map(),
     };
 
-    this._validateDependencies(); // Validate early in constructor [cite: 829]
+    this._validateDependencies();
     this.setupDefaultHealthChecks();
   }
 
@@ -59,32 +53,30 @@ export class ModuleSystem extends EventEmitter {
    * Validates that required dependencies are provided and are valid.
    * @private
    */
-  _validateDependencies() { //
-    const missing = ModuleSystem.dependencies.filter(dep => !this.deps[dep]); //
-    if (missing.length > 0) { //
-      throw new ModuleError( //
-        ErrorCodes.MODULE.MISSING_DEPENDENCIES, //
-        `ModuleSystem: Missing required dependencies: ${missing.join(', ')}`, //
-        { missingDeps: missing } //
+  _validateDependencies() {
+    const missing = ModuleSystem.dependencies.filter(dep => !this.deps[dep]);
+    if (missing.length > 0) {
+      throw new ModuleError(
+        ErrorCodes.MODULE.MISSING_DEPENDENCIES, // Uses unprefixed
+        `ModuleSystem: Missing required dependencies: ${missing.join(', ')}`,
+        { missingDeps: missing }
       );
     }
-    if (!this.deps.eventBusSystem || typeof this.deps.eventBusSystem.getEventBus !== 'function') { //
-      throw new ModuleError(ErrorCodes.MODULE.INVALID_DEPENDENCY, 'ModuleSystem: EventBusSystem is invalid.'); //
+    if (!this.deps.eventBusSystem || typeof this.deps.eventBusSystem.getEventBus !== 'function') {
+      throw new ModuleError(ErrorCodes.MODULE.INVALID_DEPENDENCY, 'ModuleSystem: EventBusSystem is invalid.'); // Uses unprefixed
     }
-    if (!this.deps.errorSystem || typeof this.deps.errorSystem.handleError !== 'function') { //
-      throw new ModuleError(ErrorCodes.MODULE.INVALID_DEPENDENCY, 'ModuleSystem: ErrorSystem is invalid.'); //
+    if (!this.deps.errorSystem || typeof this.deps.errorSystem.handleError !== 'function') {
+      throw new ModuleError(ErrorCodes.MODULE.INVALID_DEPENDENCY, 'ModuleSystem: ErrorSystem is invalid.'); // Uses unprefixed
+    }
+    if (!this.deps.containerSystem || typeof this.deps.containerSystem.resolve !== 'function') {
+      throw new ModuleError(ErrorCodes.MODULE.INVALID_DEPENDENCY, 'ModuleSystem: ContainerSystem is invalid or missing.'); // Uses unprefixed
     }
   }
 
-  /**
-   * Handles internal operational errors of the ModuleSystem.
-   * @private
-   */
   async _handleInternalError(error, context = {}) {
-    const errorToLog = !(error instanceof ModuleError || error instanceof ValidationError)
-      ? new ModuleError(ErrorCodes.MODULE.SYSTEM_ERROR || 'SYSTEM_ERROR', error.message, context, { cause: error })
+    const errorToLog = !(error instanceof ModuleError || error instanceof ValidationError || error instanceof CoreError)
+      ? new ModuleError(ErrorCodes.MODULE.SYSTEM_ERROR, error.message, context, { cause: error })
       : error;
-
     this.state.errors.push({ error: errorToLog, timestamp: new Date().toISOString(), context });
     if (this.state.errors.length > (this.deps.config?.moduleSystem?.maxErrorHistory || DEFAULT_CONFIG.MAX_ERROR_HISTORY)) {
       this.state.errors.shift();
@@ -93,16 +85,9 @@ export class ModuleSystem extends EventEmitter {
     await safeHandleError(this.deps.errorSystem, errorToLog, { source: 'ModuleSystem', ...context });
   }
 
-  /**
-   * Handles errors reported by individual modules (e.g., via 'module:error' event or health checks).
-   * @param {string} moduleName - The name of the module reporting the error.
-   * @param {Error} error - The error object from the module.
-   * @param {object} [moduleContext={}] - Context provided by the module.
-   */
-  async handleModuleError(moduleName, error, moduleContext = {}) { //
-    // Log this as an operational error received by ModuleSystem
+  async handleModuleError(moduleName, error, moduleContext = {}) {
     this.state.errors.push({
-      error, // Store the original error from the module
+      error,
       timestamp: new Date().toISOString(),
       context: { moduleName, ...moduleContext, type: 'moduleReported' }
     });
@@ -110,165 +95,198 @@ export class ModuleSystem extends EventEmitter {
       this.state.errors.shift();
     }
     this.recordMetric('modulesystem.errors.module_reported', 1, { moduleName, errorName: error.name, errorCode: error.code });
-
-    // Forward the error to the global ErrorSystem.
-    // The module itself should have already used its own handleError,
-    // so this is ModuleSystem ensuring it's also seen at a higher level if needed.
-    // However, the original handleModuleError was directly calling errorSystem.handleError
-    // This implies that 'module:error' events are directly handled by ModuleSystem's errorSystem binding.
-    // Let's keep that direct forwarding behavior.
     await safeHandleError(this.deps.errorSystem, error, {
-      source: 'ModuleSystemRelay', // Indicate it's relayed by ModuleSystem
+      source: 'ModuleSystemRelay',
       module: moduleName,
       originalContext: moduleContext,
       timestamp: new Date().toISOString()
     });
-
-    // Emit a system-level event about the module error
-    // Use super.emit to avoid potential loop with ModuleSystem's own emit override
-    super.emit('module:error', { //
+    super.emit('module:error', {
       module: moduleName,
-      error, // The original error from the module
-      context: moduleContext, // Context from the module
+      error,
+      context: moduleContext,
       timestamp: new Date().toISOString()
     });
   }
 
-
-  /**
-   * Emits an event locally on this ModuleSystem instance and broadcasts it via the global EventBus.
-   * @param {string} eventName - The name of the event.
-   * @param {...any} args - Arguments to pass to the event listeners and EventBus.
-   */
-  async emit(eventName, ...args) { //
-    const localEmitResult = super.emit(eventName, ...args); //
-
-    if (this.eventBus && typeof this.eventBus.emit === 'function' && this.state.status === SYSTEM_STATUS.RUNNING) { //
+  async emit(eventName, ...args) {
+    const localEmitResult = super.emit(eventName, ...args);
+    if (this.eventBus && typeof this.eventBus.emit === 'function' && this.state.status === SYSTEM_STATUS.RUNNING) {
       try {
-        // Assume args[0] is data, args[1] is options for CoreEventBus
-        await this.eventBus.emit(eventName, args[0], args[1] || {}); //
+        await this.eventBus.emit(eventName, args[0], args[1] || {});
       } catch (busError) {
-        await this._handleInternalError(busError, { // (adapted)
+        await this._handleInternalError(busError, {
           phase: 'event-bus-emit', eventName,
           argsSummary: args.map(arg => typeof arg).join(', ')
         });
       }
     }
-    return localEmitResult; //
+    return localEmitResult;
   }
 
   /**
-   * Registers a module with the system.
+   * Registers a module with the system, resolving and injecting its dependencies.
    * @param {string} name - The unique name for the module.
-   * @param {typeof CoreModule} ModuleClass - The class of the module to register (must extend CoreModule).
-   * @param {object} [config={}] - Module-specific configuration.
-   * @returns {Promise<CoreModule>} The registered module instance.
+   * @param {typeof CoreModule} ModuleClass - The class of the module to register.
+   * @param {object} [moduleUserConfig={}] - Module-specific configuration provided at registration.
+   * @returns {Promise<CoreModule>} The registered and configured module instance.
    */
-  async register(name, ModuleClass, config = {}) { //
-    if (!(ModuleClass && ModuleClass.prototype instanceof CoreModule)) { //
-      throw new ValidationError( //
-        ErrorCodes.VALIDATION.INVALID_MODULE, //
-        `${name}: ModuleClass must extend CoreModule.` //
+  async register(name, ModuleClass, moduleUserConfig = {}) {
+    if (!(ModuleClass && ModuleClass.prototype instanceof CoreModule)) {
+      throw new ModuleError(
+        ErrorCodes.MODULE.INVALID_MODULE, // Uses unprefixed
+        `${name}: ModuleClass must extend CoreModule.`
       );
     }
-    if (this.modules.has(name)) { //
-      throw new ModuleError( //
-        ErrorCodes.MODULE.DUPLICATE_MODULE, //
-        `${name}: Module is already registered.` //
+    if (this.modules.has(name)) {
+      throw new ModuleError(
+        ErrorCodes.MODULE.DUPLICATE_MODULE, // Uses unprefixed
+        `${name}: Module is already registered.`
       );
     }
 
     try {
-      // Merge global config for the module with instance-specific config
       const moduleSpecificGlobalConfig = this.deps.config?.[name] || {};
-      const finalConfig = { ...moduleSpecificGlobalConfig, ...config };
+      const finalModuleConfig = { ...moduleSpecificGlobalConfig, ...moduleUserConfig };
 
-      const moduleInstance = new ModuleClass({ //
-        ...this.deps, // Pass all ModuleSystem dependencies
-        config: finalConfig, // Pass merged config specific to this module instance
-      });
-      this.modules.set(name, moduleInstance); // [cite: 840]
+      const depsForModuleConstructor = {
+        errorSystem: this.deps.errorSystem,
+        eventBusSystem: this.deps.eventBusSystem,
+        config: finalModuleConfig,
+        containerSystem: this.deps.containerSystem, // Provide containerSystem
+      };
 
-      // Listen for 'module:error' events directly from this module instance
-      // to use ModuleSystem's centralized handling.
-      moduleInstance.on('module:error', async ({ module: modNameIgnored, error, context }) => {
-        // modNameIgnored should be `name`
+      const declaredDependencies = ModuleClass.dependencies || [];
+      for (const depDecl of declaredDependencies) {
+        const depName = typeof depDecl === 'string' ? depDecl : depDecl.name;
+        const isOptional = typeof depDecl === 'object' && depDecl.optional === true;
+
+        // Skip if already a core dependency provided by ModuleSystem directly or 'containerSystem'
+        if (['errorSystem', 'eventBusSystem', 'config', 'containerSystem'].includes(depName)) {
+          continue;
+        }
+
+        if (this.modules.has(depName)) { // It's another module managed by this ModuleSystem
+          depsForModuleConstructor[depName] = this.modules.get(depName);
+        } else if (!ModuleSystem.dependencies.includes(depName) && !CoreModule.dependencies.includes(depName)) {
+          // Not a core system dep of ModuleSystem/CoreModule, not another ModuleSystem module
+          // Assume it's a non-module service to be resolved from ContainerSystem
+          try {
+            // Check if it's already resolved (e.g. if containerSystem passed it to ModuleSystem's deps)
+            if (this.deps[depName]) {
+                 depsForModuleConstructor[depName] = this.deps[depName];
+            } else {
+                 depsForModuleConstructor[depName] = await this.deps.containerSystem.resolve(depName);
+            }
+          } catch (e) {
+            // Check if the error from containerSystem.resolve is because the component is not registered
+            // The exact error code for "not found" from ContainerSystem might be SERVICE_UNKNOWN_COMPONENT
+            // ErrorSystem wraps it as SERVICE_UNKNOWN_COMPONENT
+            // CoreError subclasses prefix their codes. ServiceError uses SERVICE_ + specific code.
+            const expectedNotFoundCode = `SERVICE_${ErrorCodes.SERVICE.UNKNOWN_COMPONENT}`;
+            if (isOptional && e.code === expectedNotFoundCode) {
+              this.deps.logger.warn(`[ModuleSystem] Optional non-module service dependency '${depName}' for module '${name}' not found in ContainerSystem. Injecting null.`);
+              depsForModuleConstructor[depName] = null;
+            } else if (!isOptional) {
+              // Required service not found, or other resolution error
+              const depError = new ModuleError(
+                ErrorCodes.MODULE.DEPENDENCY_RESOLUTION_FAILED, // Uses unprefixed
+                `Module '${name}': Failed to resolve required non-module service dependency '${depName}' from ContainerSystem.`,
+                { moduleName: name, depName, originalError: e.message },
+                { cause: e }
+              );
+              await this._handleInternalError(depError, { phase: 'register-dependency-resolution', failingModule: name, failingDependency: depName });
+              throw depError; // Halt registration for this module
+            } else { // Optional but resolution failed for another reason
+                 this.deps.logger.warn(`[ModuleSystem] Error resolving optional non-module service dependency '${depName}' for module '${name}': ${e.message}. Injecting null.`);
+                 depsForModuleConstructor[depName] = null;
+            }
+          }
+        }
+        // If it's an optional inter-module dependency that's not registered, it will be undefined here,
+        // and the module constructor should handle deps[depName] being undefined or null.
+        // Let's ensure optional missing modules are explicitly null.
+        else if (isOptional && !this.modules.has(depName) && !ModuleSystem.dependencies.includes(depName) && !CoreModule.dependencies.includes(depName)) {
+            this.deps.logger.info(`[ModuleSystem] Optional inter-module dependency '${depName}' for module '${name}' not found. Injecting null.`);
+            depsForModuleConstructor[depName] = null;
+        }
+      }
+
+      const moduleInstance = new ModuleClass(depsForModuleConstructor);
+      this.modules.set(name, moduleInstance);
+
+      moduleInstance.on('module:error', async ({ error, context }) => {
         await this.handleModuleError(name, error, context);
       });
-
       this.recordMetric('modulesystem.modules.registered', 1, { moduleName: name });
-      await this.emit('module:registered', { name, timestamp: new Date().toISOString() }); //
-      return moduleInstance; //
+      await this.emit('module:registered', { name, timestamp: new Date().toISOString() });
+      return moduleInstance;
     } catch (error) {
-      const regError = new ModuleError( //
-        ErrorCodes.MODULE.REGISTRATION_FAILED, //
-        `Failed to register module ${name}.`, //
+      // Catch errors from instantiation or dependency resolution step
+      const regError = error instanceof ModuleError || error instanceof ValidationError ? error : new ModuleError(
+        ErrorCodes.MODULE.REGISTRATION_FAILED, // Uses unprefixed
+        `Failed to register module ${name}.`,
         { moduleName: name, originalMessage: error.message },
-        { cause: error } //
+        { cause: error }
       );
-      await this._handleInternalError(regError);
-      throw regError; //
+      // Avoid double logging if error originated from _handleInternalError path during dep resolution
+      if (!(error.context && error.context.phase === 'register-dependency-resolution' && error.context.failingModule === name) ) {
+         await this._handleInternalError(regError, { phase: 'register-module-main-catch', failingModule: name });
+      }
+      throw regError;
     }
   }
 
-  async unregister(name) { //
-    const moduleInstance = this.modules.get(name); //
-    if (!moduleInstance) return false; //
-
+  async unregister(name) {
+    const moduleInstance = this.modules.get(name);
+    if (!moduleInstance) return false;
     try {
-      if (moduleInstance.state.status === SYSTEM_STATUS.RUNNING || moduleInstance.state.status === SYSTEM_STATUS.INITIALIZING) { //
-        await moduleInstance.shutdown(); //
+      if (moduleInstance.state.status === SYSTEM_STATUS.RUNNING || moduleInstance.state.status === SYSTEM_STATUS.INITIALIZING) {
+        await moduleInstance.shutdown();
       }
-      // Stop health monitoring for this module
       this.stopModuleHealthMonitoring(name);
-
-      this.modules.delete(name); // [cite: 846]
-      this.state.moduleHealth.delete(name); // Clean up health state
+      this.modules.delete(name);
+      this.state.moduleHealth.delete(name);
       this.recordMetric('modulesystem.modules.unregistered', 1, { moduleName: name });
-      await this.emit('module:unregistered', { name, timestamp: new Date().toISOString() }); //
+      await this.emit('module:unregistered', { name, timestamp: new Date().toISOString() });
       return true;
     } catch (error) {
-      const unregError = new ModuleError( //
-        ErrorCodes.MODULE.UNREGISTER_FAILED, //
-        `Failed to unregister module ${name}.`, //
+      const unregError = new ModuleError(
+        ErrorCodes.MODULE.UNREGISTER_FAILED, // Uses unprefixed
+        `Failed to unregister module ${name}.`,
         { moduleName: name, originalMessage: error.message },
-        { cause: error } //
+        { cause: error }
       );
       await this._handleInternalError(unregError);
-      throw unregError; //
+      throw unregError;
     }
   }
 
-  async resolve(name) { //
-    const moduleInstance = this.modules.get(name); //
-    if (!moduleInstance) { //
-      throw new ModuleError(ErrorCodes.MODULE.NOT_FOUND, `Module ${name} is not registered.`); //
+  async resolve(name) {
+    const moduleInstance = this.modules.get(name);
+    if (!moduleInstance) {
+      throw new ModuleError(ErrorCodes.MODULE.NOT_FOUND, `Module ${name} is not registered.`); // Uses unprefixed
     }
-    return moduleInstance; //
+    return moduleInstance;
   }
 
-  /**
-   * Initializes all registered modules in their correct dependency order.
-   * @returns {Promise<void>}
-   */
-  async initialize() { //
+  async initialize() {
     if (this.state.status === SYSTEM_STATUS.RUNNING || this.state.status === SYSTEM_STATUS.INITIALIZING) {
-      const err = new ModuleError(ErrorCodes.MODULE.ALREADY_INITIALIZED, 'ModuleSystem is already initialized or initializing.'); //
+      const err = new ModuleError(ErrorCodes.MODULE.ALREADY_INITIALIZED, 'ModuleSystem is already initialized or initializing.');
       await this._handleInternalError(err);
       return;
     }
 
-    super.emit(LIFECYCLE_EVENTS.INITIALIZING, { system: 'ModuleSystem' }); // Use super.emit for own lifecycle
-    this.state.status = SYSTEM_STATUS.INITIALIZING; //
-    this.state.startTime = Date.now(); //
+    super.emit(LIFECYCLE_EVENTS.INITIALIZING, { system: 'ModuleSystem' });
+    this.state.status = SYSTEM_STATUS.INITIALIZING;
+    this.state.startTime = Date.now();
 
-    // Re-fetch eventBus here
      if (this.deps.eventBusSystem && typeof this.deps.eventBusSystem.getEventBus === 'function') {
           try {
             this.eventBus = this.deps.eventBusSystem.getEventBus();
           } catch (e) {
              throw new ModuleError(
-                ErrorCodes.MODULE.DEPENDENCY_NOT_READY,
+                ErrorCodes.MODULE.DEPENDENCY_NOT_READY, // Uses unprefixed
                 `ModuleSystem: EventBusSystem is not ready during initialization.`,
                 { dependency: 'eventBusSystem' },
                 { cause: e }
@@ -278,201 +296,216 @@ export class ModuleSystem extends EventEmitter {
           throw new ModuleError(ErrorCodes.MODULE.INVALID_DEPENDENCY, `ModuleSystem: EventBus could not be obtained.`);
       }
 
-
     try {
-      const initOrder = this.resolveDependencyOrder(); //
-      for (const name of initOrder) { //
-        const moduleInstance = this.modules.get(name); //
-        if(moduleInstance) { // Ensure module exists
-            await moduleInstance.initialize(); //
-            await this.startModuleHealthMonitoring(name); //
-        } else {
-            // Should ideally not happen if resolveDependencyOrder is correct
-            throw new ModuleError(ErrorCodes.MODULE.INTERNAL_ERROR, `Module ${name} found in initOrder but not in registered modules.`);
+      const initOrder = this.resolveDependencyOrder();
+      for (const name of initOrder) {
+        const moduleInstance = this.modules.get(name);
+        if(moduleInstance) { // Module might be optional and not present if initOrder doesn't filter them
+            await moduleInstance.initialize();
+            await this.startModuleHealthMonitoring(name);
         }
       }
 
-      this.state.status = SYSTEM_STATUS.RUNNING; //
+      this.state.status = SYSTEM_STATUS.RUNNING;
       this.recordMetric('modulesystem.initialized.success', 1);
-      await this.emit('system:initialized', { //
-        timestamp: new Date().toISOString(), //
-        modules: Array.from(this.modules.keys()), //
+      await this.emit('system:initialized', {
+        timestamp: new Date().toISOString(),
+        modules: Array.from(this.modules.keys()),
       });
-      super.emit(LIFECYCLE_EVENTS.INITIALIZED, { system: 'ModuleSystem', timestamp: new Date().toISOString() }); //
+      super.emit(LIFECYCLE_EVENTS.INITIALIZED, { system: 'ModuleSystem', timestamp: new Date().toISOString() });
       super.emit(LIFECYCLE_EVENTS.RUNNING, { system: 'ModuleSystem', timestamp: new Date().toISOString() });
-
-
     } catch (error) {
-      this.state.status = SYSTEM_STATUS.ERROR; //
+      this.state.status = SYSTEM_STATUS.ERROR;
       this.recordMetric('modulesystem.initialized.failure', 1, { error: error.code });
-      await this._handleInternalError(error, { phase: 'initialization' }); //
-      const initError = error instanceof ModuleError ? error : new ModuleError( //
-        ErrorCodes.MODULE.INITIALIZATION_FAILED, //
-        'ModuleSystem failed to initialize.', //
+      await this._handleInternalError(error, { phase: 'initialization' });
+      const initError = error instanceof ModuleError || error instanceof ValidationError ? error : new ModuleError(
+        ErrorCodes.MODULE.INITIALIZATION_FAILED, // Uses unprefixed
+        'ModuleSystem failed to initialize.',
         { originalMessage: error.message },
-        { cause: error } //
+        { cause: error }
       );
       super.emit('system:error', { system: 'ModuleSystem', error: initError, context: {phase: 'initialization'}});
-      throw initError; //
+      throw initError;
     }
   }
 
-  resolveDependencyOrder() { //
-    const visited = new Set(); //
-    const visiting = new Set(); //
-    const order = []; //
+  resolveDependencyOrder() {
+    const visited = new Set();
+    const visiting = new Set();
+    const order = [];
 
-    const visit = (name) => { //
-      if (visited.has(name)) return; //
-      if (visiting.has(name)) { //
-        throw new ModuleError( //
-          ErrorCodes.MODULE.CIRCULAR_DEPENDENCY, //
-          `Circular dependency detected for module: ${name}. Path: ${Array.from(visiting).join(' -> ')} -> ${name}` //
+    const visit = (name) => {
+      if (!this.modules.has(name)) { // If an optional module was declared but not registered, don't try to visit
+          const isOptionalModule = Array.from(this.modules.values()).some(modInst => 
+              (modInst.constructor.dependencies || []).some(dep => typeof dep === 'object' && dep.name === name && dep.optional)
+          );
+          if (isOptionalModule) {
+              this.deps.logger.info(`[ModuleSystem] Optional module '${name}' not registered, skipping in dependency order.`);
+              return;
+          }
+          // If it's not an optional module and not registered, this is an issue that should ideally be caught earlier
+          // or indicates an internal inconsistency.
+          throw new ModuleError(ErrorCodes.MODULE.NOT_FOUND, `Module '${name}' referenced in dependency graph but not registered.`);
+      }
+      if (visited.has(name)) return;
+      if (visiting.has(name)) {
+        throw new ModuleError(
+          ErrorCodes.MODULE.CIRCULAR_DEPENDENCY, // Uses unprefixed
+          `Circular dependency detected for module: ${name}. Path: ${Array.from(visiting).join(' -> ')} -> ${name}`
         );
       }
-      visiting.add(name); //
+      visiting.add(name);
 
-      const moduleInstance = this.modules.get(name); //
-      if (!moduleInstance) {
-          visiting.delete(name);
-          // This case should ideally be caught by dependency checks within modules if a listed dep isn't registered at all.
-          // Or if ModuleSystem tries to init a non-existent module.
-          throw new ModuleError(ErrorCodes.MODULE.NOT_FOUND, `Module ${name} not found during dependency resolution.`);
-      }
-      // Use static dependencies from the ModuleClass constructor
-      const deps = moduleInstance.constructor.dependencies || []; //
+      const moduleInstance = this.modules.get(name); // Should exist due to check above
+      
+      const depsDeclarations = moduleInstance.constructor.dependencies || [];
+      for (const depDecl of depsDeclarations) {
+        const depName = typeof depDecl === 'string' ? depDecl : depDecl.name;
+        const isOptional = typeof depDecl === 'object' && depDecl.optional === true;
 
-      for (const depName of deps) { //
-        // CoreSystem dependencies (like 'errorSystem') are not modules managed by ModuleSystem
-        // So, only try to visit if 'depName' refers to another module *registered in this ModuleSystem*
-        if (this.modules.has(depName)) { //
-          visit(depName); //
-        } else if (!ModuleSystem.dependencies.includes(depName) && !CoreModule.dependencies.includes(depName)) {
-          // If it's not a known core/system dep and not a registered module, it's a missing module dependency
-          throw new ModuleError( //
-            ErrorCodes.MODULE.MISSING_DEPENDENCY, //
-            `Module '${name}' requires missing module: '${depName}', which is not a registered module or a known core system dependency.`, //
+        // Only try to visit if 'depName' refers to another module *registered in this ModuleSystem*
+        if (this.modules.has(depName)) {
+          visit(depName);
+        } else if (!ModuleSystem.dependencies.includes(depName) && !CoreModule.dependencies.includes(depName) && 
+                   !this.deps.containerSystem.components?.has(depName) && // Check if it's a known service in container
+                   !isOptional) {
+          // If it's not a known core/system dep, not a registered ModuleSystem module, not known by container, AND it's required
+          throw new ModuleError(
+            ErrorCodes.MODULE.MISSING_DEPENDENCY, // Uses unprefixed
+            `Module '${name}' requires missing dependency: '${depName}', which is not a registered module or known service.`,
             { requiringModule: name, missingModule: depName }
           );
+        } else if (isOptional && !this.modules.has(depName) && 
+                   !ModuleSystem.dependencies.includes(depName) && 
+                   !CoreModule.dependencies.includes(depName) &&
+                   !this.deps.containerSystem.components?.has(depName)
+                   ) {
+            // It's an optional dependency (module or service) and it's not found anywhere. Log and continue.
+            this.deps.logger.warn(`[ModuleSystem] Optional dependency '${depName}' for module '${name}' not found. It will be injected as null/undefined.`);
         }
+        // If it's a service to be resolved by ContainerSystem, ModuleSystem doesn't order it, ContainerSystem does.
       }
-      visiting.delete(name); //
-      visited.add(name); //
-      order.push(name); //
+      visiting.delete(name);
+      visited.add(name);
+      order.push(name);
     };
 
-    for (const name of this.modules.keys()) { //
-      visit(name); //
+    // Ensure all modules are visited, even if not depended upon by others (for their own service deps)
+    for (const name of this.modules.keys()) {
+      if (!visited.has(name)) {
+          visit(name);
+      }
     }
-    return order; //
+    return order;
   }
 
-  async startModuleHealthMonitoring(name) { //
-    const moduleInstance = this.modules.get(name); //
-    if (!moduleInstance || typeof moduleInstance.checkHealth !== 'function') return; //
+  async startModuleHealthMonitoring(name) {
+    const moduleInstance = this.modules.get(name);
+    if (!moduleInstance || typeof moduleInstance.checkHealth !== 'function') return;
 
-    this.stopModuleHealthMonitoring(name); // Clear existing interval for this module
+    this.stopModuleHealthMonitoring(name);
 
     const intervalMs = moduleInstance.config?.healthCheckIntervalMs ||
                        this.deps.config?.moduleSystem?.defaultHealthCheckIntervalMs ||
                        DEFAULT_CONFIG.DEFAULT_HEALTH_CHECK_INTERVAL;
-
-    const intervalId = setInterval(async () => { //
+    if (moduleInstance.state.healthChecks.size === 0) { // Don't monitor if module has no health checks
+        this.deps.logger.info(`[ModuleSystem] Module '${name}' has no health checks registered. Skipping periodic monitoring.`);
+        return;
+    }
+    const intervalId = setInterval(async () => {
       try {
-        const health = await moduleInstance.checkHealth(); //
-        this.state.moduleHealth.set(name, health); // Store the full health object
+        const health = await moduleInstance.checkHealth();
+        this.state.moduleHealth.set(name, health);
         this.recordMetric(`modulesystem.module.${name}.health.status`, health.status === SYSTEM_STATUS.HEALTHY ? 1 : 0, { status: health.status });
 
-        if (health.status !== SYSTEM_STATUS.HEALTHY) { //
-          // Module's own health check interval might also report this.
-          // ModuleSystem logging it provides a central view.
-          // The error created by moduleInstance.startHealthChecks already uses moduleInstance.handleError
-          // So, this might be redundant unless we want MS to explicitly log it.
-          // For now, let module's own health check error reporting (via its handleError) be primary.
-          // ModuleSystem's role here is to *collect* the health status.
-          // It can emit a generic event if a module becomes unhealthy.
+        if (health.status !== SYSTEM_STATUS.HEALTHY) {
           super.emit('module:unhealthy', { moduleName: name, healthStatus: health.status, healthDetails: health });
         }
       } catch (error) {
-        // This error is if moduleInstance.checkHealth() itself throws, not if it returns unhealthy
         const healthCheckError = new ModuleError(
-            ErrorCodes.MODULE.HEALTH_CHECK_FAILED,
+            ErrorCodes.MODULE.HEALTH_CHECK_FAILED, // Uses unprefixed
             `Error executing health check for module ${name}.`,
             { moduleName: name, originalMessage: error.message },
             { cause: error }
         );
         this.state.moduleHealth.set(name, createStandardHealthCheckResult(SYSTEM_STATUS.UNHEALTHY, { error: 'checkHealth execution failed' }, [healthCheckError]));
-        await this.handleModuleError(name, healthCheckError, { phase: 'health-monitoring' }); // Use ModuleSystem's handler
+        await this.handleModuleError(name, healthCheckError, { phase: 'health-monitoring' });
       }
-    }, intervalMs); //
-    this.state.healthCheckIntervals.set(name, intervalId); //
+    }, intervalMs);
+    this.state.healthCheckIntervals.set(name, intervalId);
   }
 
   stopModuleHealthMonitoring(name) {
     if (this.state.healthCheckIntervals.has(name)) {
-      clearInterval(this.state.healthCheckIntervals.get(name)); //
+      clearInterval(this.state.healthCheckIntervals.get(name));
       this.state.healthCheckIntervals.delete(name);
     }
   }
 
-  /**
-   * Shuts down all registered modules in reverse dependency order.
-   * @returns {Promise<void>}
-   */
-  async shutdown() { //
-    if (this.state.status === SYSTEM_STATUS.SHUTDOWN || this.state.status === SYSTEM_STATUS.SHUTTING_DOWN) { //
+  async shutdown() {
+    if (this.state.status === SYSTEM_STATUS.SHUTDOWN || this.state.status === SYSTEM_STATUS.SHUTTING_DOWN) {
       return;
     }
     super.emit(LIFECYCLE_EVENTS.SHUTTING_DOWN, { system: 'ModuleSystem' });
-    this.state.status = SYSTEM_STATUS.SHUTTING_DOWN; //
+    this.state.status = SYSTEM_STATUS.SHUTTING_DOWN;
     const shutdownStartTime = Date.now();
-
-    // Clear all health check intervals
-    for (const intervalId of this.state.healthCheckIntervals.values()) { //
-      clearInterval(intervalId); //
+    for (const intervalId of this.state.healthCheckIntervals.values()) {
+      clearInterval(intervalId);
     }
-    this.state.healthCheckIntervals.clear(); //
+    this.state.healthCheckIntervals.clear();
 
     try {
-      const shutdownOrder = this.resolveDependencyOrder().reverse(); //
-      for (const name of shutdownOrder) { //
-        const moduleInstance = this.modules.get(name); //
-        if (moduleInstance) { //
-            await moduleInstance.shutdown(); //
+      // Resolve order can still fail if modules were dynamically added/removed without proper checks,
+      // but typically this should be stable if register/unregister are the only modifiers.
+      let shutdownOrder = [];
+      try {
+        shutdownOrder = this.resolveDependencyOrder().reverse();
+      } catch (e) {
+          this.deps.logger.error(`[ModuleSystem] Could not resolve dependency order for shutdown, shutting down in registration order: ${e.message}`);
+          // Fallback: shutdown in reverse registration order or just iterate this.modules
+          shutdownOrder = Array.from(this.modules.keys()).reverse();
+      }
+
+      for (const name of shutdownOrder) {
+        const moduleInstance = this.modules.get(name);
+        if (moduleInstance) {
+            try {
+                await moduleInstance.shutdown();
+            } catch(moduleShutdownError) {
+                // Log error for this specific module, but continue shutting down others
+                await this.handleModuleError(name, moduleShutdownError, { phase: 'module-shutdown' });
+            }
         }
       }
 
-      this.modules.clear(); //
+      this.modules.clear();
       this.state.moduleHealth.clear();
-      this.state.status = SYSTEM_STATUS.SHUTDOWN; // [cite: 894]
+      this.state.status = SYSTEM_STATUS.SHUTDOWN;
       this.state.startTime = null;
       const shutdownTime = Date.now() - shutdownStartTime;
       this.recordMetric('modulesystem.shutdown.time', shutdownTime);
       this.recordMetric('modulesystem.shutdown.success', 1);
-      await this.emit('system:shutdown', { timestamp: new Date().toISOString() }); //
+      await this.emit('system:shutdown', { timestamp: new Date().toISOString() });
       super.emit(LIFECYCLE_EVENTS.SHUTDOWN, { system: 'ModuleSystem', durationMs: shutdownTime, timestamp: new Date().toISOString() });
-
-
-    } catch (error) {
-      this.state.status = SYSTEM_STATUS.ERROR; //
+    } catch (error) { // Catch errors from resolveDependencyOrder if it wasn't caught above, or other logic here
+      this.state.status = SYSTEM_STATUS.ERROR;
       this.recordMetric('modulesystem.shutdown.failure', 1, { error: error.code });
-      await this._handleInternalError(error, { phase: 'shutdown' }); //
-      const shutdownError = error instanceof ModuleError ? error : new ModuleError( //
-        ErrorCodes.MODULE.SHUTDOWN_FAILED, //
-        'ModuleSystem failed to shutdown.', //
+      await this._handleInternalError(error, { phase: 'shutdown' });
+      const shutdownError = error instanceof ModuleError || error instanceof ValidationError ? error : new ModuleError(
+        ErrorCodes.MODULE.SHUTDOWN_FAILED, // Uses unprefixed
+        'ModuleSystem failed to shutdown.',
         { originalMessage: error.message },
-        { cause: error } //
+        { cause: error }
       );
-      super.emit('system:error', { system: 'ModuleSystem', error: shutdownError, context: { phase: 'shutdown' } });
-      throw shutdownError; //
+      super.emit('system:error', { system: 'ModuleSystem', error: shutdownError, context: { phase: 'shutdown' }});
+      throw shutdownError;
     }
   }
 
-  // --- State, Health, Metrics for ModuleSystem itself ---
   setupDefaultHealthChecks() {
     this.registerHealthCheck('modulesystem.state', this.checkSystemState.bind(this));
     this.registerHealthCheck('modulesystem.module_overview', this.checkModuleOverviewStatus.bind(this));
-    this.registerHealthCheck('modulesystem.all_modules_health', this.getSystemHealth.bind(this)); // Renamed from original file for clarity
+    this.registerHealthCheck('modulesystem.all_modules_health', this.getSystemModulesHealth.bind(this));
   }
 
   recordMetric(name, value, tags = {}) {
@@ -484,12 +517,6 @@ export class ModuleSystem extends EventEmitter {
     for (const [name, data] of this.state.metrics) {
       metrics[name] = data;
     }
-    // Optionally aggregate metrics from all managed modules
-    // for(const [moduleName, moduleInstance] of this.modules) {
-    //    if(typeof moduleInstance.getMetrics === 'function') {
-    //        metrics[`module.${moduleName}`] = moduleInstance.getMetrics();
-    //    }
-    // }
     return metrics;
   }
 
@@ -502,7 +529,7 @@ export class ModuleSystem extends EventEmitter {
     this.state.healthChecks.set(name, checkFn);
   }
 
-  async checkHealth() { // Health of ModuleSystem itself
+  async checkHealth() {
     const results = {};
     let overallStatus = SYSTEM_STATUS.HEALTHY;
 
@@ -547,9 +574,13 @@ export class ModuleSystem extends EventEmitter {
     let degradedCount = 0;
     let unhealthyCount = 0;
     for(const [name, health] of this.state.moduleHealth) {
-        moduleStatuses[name] = health.status;
-        if(health.status === SYSTEM_STATUS.DEGRADED) degradedCount++;
-        if(health.status === SYSTEM_STATUS.UNHEALTHY) unhealthyCount++;
+        if (health && health.status) {
+            moduleStatuses[name] = health.status;
+            if(health.status === SYSTEM_STATUS.DEGRADED) degradedCount++;
+            if(health.status === SYSTEM_STATUS.UNHEALTHY) unhealthyCount++;
+        } else {
+            moduleStatuses[name] = SYSTEM_STATUS.UNAVAILABLE || 'unavailable';
+        }
     }
     const status = unhealthyCount > 0 ? SYSTEM_STATUS.UNHEALTHY : (degradedCount > 0 ? SYSTEM_STATUS.DEGRADED : SYSTEM_STATUS.HEALTHY);
     return createStandardHealthCheckResult(status, {
@@ -561,41 +592,31 @@ export class ModuleSystem extends EventEmitter {
     });
   }
 
-  /**
-   * Gets the aggregated health of all managed modules.
-   * This was previously named getSystemHealth.
-   * @returns {Promise<object>}
-   */
-  async getSystemModulesHealth() { // (renamed for clarity from getSystemHealth)
-    const moduleHealthDetails = {}; //
-    let overallSystemStatus = SYSTEM_STATUS.HEALTHY; //
+  async getSystemModulesHealth() {
+    const moduleHealthDetails = {};
+    let overallSystemStatus = SYSTEM_STATUS.HEALTHY;
 
-    for (const [name, moduleInstance] of this.modules) { //
+    for (const [name, moduleInstance] of this.modules) {
       try {
-        const health = await moduleInstance.checkHealth(); //
-        moduleHealthDetails[name] = health; //
-        if (health.status !== SYSTEM_STATUS.HEALTHY) { //
+        const health = await moduleInstance.checkHealth();
+        moduleHealthDetails[name] = health;
+        if (health.status !== SYSTEM_STATUS.HEALTHY) {
           overallSystemStatus = (overallSystemStatus === SYSTEM_STATUS.HEALTHY && health.status === SYSTEM_STATUS.DEGRADED)
             ? SYSTEM_STATUS.DEGRADED
-            : SYSTEM_STATUS.UNHEALTHY; //
+            : SYSTEM_STATUS.UNHEALTHY;
         }
       } catch (error) {
-        moduleHealthDetails[name] = createStandardHealthCheckResult(SYSTEM_STATUS.UNHEALTHY, {error: `Failed to check health for module ${name}`}, [error]); //
-        overallSystemStatus = SYSTEM_STATUS.UNHEALTHY; //
+        const moduleCheckError = error instanceof CoreError ? error : new ModuleError(ErrorCodes.MODULE.HEALTH_CHECK_FAILED, `Failed to check health for module ${name}`, {moduleName: name}, {cause: error});
+        moduleHealthDetails[name] = createStandardHealthCheckResult(SYSTEM_STATUS.UNHEALTHY, {error: `Failed to check health for module ${name}`}, [moduleCheckError]);
+        overallSystemStatus = SYSTEM_STATUS.UNHEALTHY;
       }
     }
-
-    return { // This is the health detail for one of ModuleSystem's own checks
-      status: overallSystemStatus,
-      timestamp: new Date().toISOString(),
-      detail: {
-        uptime: this.state.startTime ? Date.now() - this.state.startTime : 0, // Uptime of ModuleSystem
-        modules: moduleHealthDetails, //
+    return createStandardHealthCheckResult(overallSystemStatus, {
+        uptime: this.state.startTime ? Date.now() - this.state.startTime : 0,
+        modules: moduleHealthDetails,
         moduleErrorCount: this.state.errors.filter(e => e.context?.type === 'moduleReported').length
-      }
-    };
+    });
   }
-
 
   getSystemStatus() {
     return {
@@ -616,10 +637,6 @@ export class ModuleSystem extends EventEmitter {
  * @param {object} [deps={}] - Dependencies for the ModuleSystem.
  * @returns {ModuleSystem}
  */
-export function createModuleSystem(deps = {}) { //
-  // Constructor now handles its own dependency validation and defaults for errorSystem/eventBusSystem.
-  return new ModuleSystem(deps); //
+export function createModuleSystem(deps = {}) {
+ return new ModuleSystem(deps);
 }
-
-// Default export was an object in original file.
-// export default { ModuleSystem, createModuleSystem };

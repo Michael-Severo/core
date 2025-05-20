@@ -13,13 +13,15 @@ import { CoreError } from '../CoreError.js';
 export class AccessError extends CoreError {
   /**
    * Creates a new AccessError instance.
-   * @param {string} code - A specific error code for the access issue (e.g., 'INSUFFICIENT_PERMISSIONS').
+   * The constructor will prepend "ACCESS_" to the provided specific code.
+   * @param {string} code - A specific, **unprefixed** error code from `ErrorCodes.ACCESS` (e.g., 'INSUFFICIENT_PERMISSIONS').
    * @param {string} message - A human-readable description of the error.
    * @param {object} [details={}] - Additional details about the access error.
    * @param {object} [options={}] - Additional error options, including 'cause'.
    */
   constructor(code, message, details = {}, options = {}) {
-    super(`ACCESS_${code}`, message, details, options); // [cite: 374]
-    this.statusCode = 403; // [cite: 374]
+    super(`ACCESS_${code}`, message, details, options); // [cite: 2038]
+    this.name = 'AccessError';
+    this.statusCode = 403; // [cite: 2038]
   }
 }

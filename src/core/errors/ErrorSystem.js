@@ -7,7 +7,7 @@ import { EventEmitter } from 'events';
 import { CoreError } from './CoreError.js';
 import * as ErrorTypes from './types/index.js'; // Assuming types/index.js exports all named error types
 import { ErrorCodes } from './ErrorCodes.js'; // Assuming ErrorCodes are in their own file
-import { FastifyErrorHandler } from './integrations/fastify/FastifyErrorHandler.js'; // Adjusted import
+// import { FastifyErrorHandler } from './integrations/fastify/FastifyErrorHandler.js'; // Not used directly, registered via registerIntegration
 import { SYSTEM_STATUS, LIFECYCLE_EVENTS, DEFAULT_CONFIG } from '../common/SystemConstants.js';
 import { safeHandleError, createStandardHealthCheckResult } from '../common/ErrorUtils.js';
 
@@ -29,10 +29,10 @@ export class ErrorSystem extends EventEmitter {
       // ErrorSystem does not depend on itself for safeHandleError
     };
 
-    this.errorTypes = new Map(Object.entries(ErrorTypes));
+    this.errorTypes = new Map(Object.entries(ErrorTypes.ErrorTypes || ErrorTypes)); // Access ErrorTypes from the imported namespace
     this.customHandlers = new Map(); // Renamed from 'handlers' to be more specific
     this.integrations = new Map();
-    this.initialized = false; // Will be driven by state.status
+    // this.initialized = false; // Will be driven by state.status // This line was commented in original, keeping it so.
 
     this.state = {
       status: SYSTEM_STATUS.CREATED,
@@ -41,9 +41,9 @@ export class ErrorSystem extends EventEmitter {
       metrics: new Map(),
       healthChecks: new Map(),
     };
-
     // Ensure a default handler is always present for unhandled CoreErrors
-    this.registerHandler(CoreError.name, this.defaultCoreErrorHandler.bind(this)); // More specific default
+    this.registerHandler(CoreError.name, this.defaultCoreErrorHandler.bind(this));
+    // More specific default
     this.registerHealthCheck('errorsystem.state', this.checkSystemState.bind(this));
     this.registerHealthCheck('errorsystem.handlers', this.checkHandlerStatus.bind(this));
     this.registerHealthCheck('errorsystem.integrations', this.checkIntegrationStatus.bind(this));
@@ -58,7 +58,7 @@ export class ErrorSystem extends EventEmitter {
     if (this.state.status === SYSTEM_STATUS.RUNNING || this.state.status === SYSTEM_STATUS.INITIALIZING) {
       // Use internal handler for this operational error
       const err = new CoreError(
-        ErrorCodes.CORE.ALREADY_INITIALIZED, // Assuming such a code exists or is added
+        ErrorCodes.CORE.ALREADY_INITIALIZED, // Using CORE prefixed code
         'ErrorSystem is already initialized or initializing.'
       );
       await this._handleInternalError(err, { currentStatus: this.state.status });
@@ -74,7 +74,7 @@ export class ErrorSystem extends EventEmitter {
       for (const [name, ErrorTypeClass] of this.errorTypes) {
         if (!(ErrorTypeClass.prototype instanceof CoreError)) {
           throw new CoreError(
-            ErrorCodes.CORE.INVALID_TYPE, // Assuming a general invalid type code
+            ErrorCodes.CORE.INVALID_TYPE, // Using CORE prefixed code
             `Registered error type '${name}' must extend CoreError.`
           );
         }
@@ -83,7 +83,7 @@ export class ErrorSystem extends EventEmitter {
       // Potentially initialize default integrations if specified in config
       // Example: if (this.deps.config.errorSystem?.defaultIntegration === 'fastify') { ... }
 
-      this.initialized = true; // Redundant with state.status but kept for current compatibility
+      // this.initialized = true; // Redundant with state.status but kept for current compatibility // This line was commented in original
       this.state.status = SYSTEM_STATUS.RUNNING;
       this.recordMetric('errorsystem.initialized.success', 1, { timestamp: Date.now() });
       this.emit(LIFECYCLE_EVENTS.INITIALIZED, { system: 'ErrorSystem', timestamp: new Date().toISOString() });
@@ -95,8 +95,9 @@ export class ErrorSystem extends EventEmitter {
       this.recordMetric('errorsystem.initialized.failure', 1, { error: error.code, timestamp: Date.now() });
       await this._handleInternalError(error, { phase: 'initialization' });
       // Re-throw to signal catastrophic failure of ErrorSystem initialization
-      throw error instanceof CoreError ? error : new CoreError(
-        ErrorCodes.CORE.INITIALIZATION_FAILED,
+      throw error instanceof CoreError ?
+      error : new CoreError(
+        ErrorCodes.CORE.INITIALIZATION_FAILED, // Using CORE prefixed code
         'ErrorSystem failed to initialize.',
         { originalMessage: error.message },
         { cause: error }
@@ -112,12 +113,12 @@ export class ErrorSystem extends EventEmitter {
    */
   registerHandler(errorTypeName, handler) {
     if (typeof handler !== 'function') {
-      const err = new CoreError(ErrorCodes.CORE.INVALID_HANDLER, 'Error handler must be a function.', { errorTypeName }); //
+      const err = new CoreError(ErrorCodes.CORE.INVALID_HANDLER, 'Error handler must be a function.', { errorTypeName }); // Using CORE prefixed code
       this._handleInternalError(err); // Log internal error
       throw err; // Throw for immediate feedback
     }
     if (typeof errorTypeName !== 'string' || !errorTypeName.trim()) {
-        const err = new CoreError(ErrorCodes.CORE.INVALID_TYPE, 'Error type name must be a non-empty string.', { handlerName: handler.name });
+        const err = new CoreError(ErrorCodes.CORE.INVALID_TYPE, 'Error type name must be a non-empty string.', { handlerName: handler.name }); // Using CORE prefixed code
         this._handleInternalError(err);
         throw err;
     }
@@ -135,17 +136,17 @@ export class ErrorSystem extends EventEmitter {
    */
   async registerIntegration(integrationName, IntegrationClass, frameworkInstance, options = {}) {
     if (!integrationName || typeof integrationName !== 'string') {
-        const err = new CoreError(ErrorCodes.CORE.INVALID_ARGUMENT, 'Integration name must be a non-empty string.');
+        const err = new CoreError(ErrorCodes.CORE.INVALID_ARGUMENT, 'Integration name must be a non-empty string.'); // Using CORE prefixed code
         await this._handleInternalError(err);
         throw err;
     }
     if (!IntegrationClass || typeof IntegrationClass !== 'function' || !IntegrationClass.prototype || typeof IntegrationClass.prototype.initialize !== 'function') {
-        const err = new CoreError(ErrorCodes.CORE.INVALID_ARGUMENT, `IntegrationClass for '${integrationName}' is invalid or does not have an initialize method.`);
+        const err = new CoreError(ErrorCodes.CORE.INVALID_ARGUMENT, `IntegrationClass for '${integrationName}' is invalid or does not have an initialize method.`); // Using CORE prefixed code
         await this._handleInternalError(err);
         throw err;
     }
      if (!frameworkInstance) {
-        const err = new CoreError(ErrorCodes.CORE.INVALID_ARGUMENT, `Framework instance for '${integrationName}' is required.`);
+        const err = new CoreError(ErrorCodes.CORE.INVALID_ARGUMENT, `Framework instance for '${integrationName}' is required.`); // Using CORE prefixed code
         await this._handleInternalError(err);
         throw err;
     }
@@ -158,7 +159,7 @@ export class ErrorSystem extends EventEmitter {
       return integration;
     } catch (error) {
       const err = new CoreError(
-          ErrorCodes.CORE.INTEGRATION_FAILED, // Assuming such code exists
+          ErrorCodes.CORE.INTEGRATION_FAILED, // Using CORE prefixed code
           `Failed to register or initialize integration '${integrationName}'.`,
           { integrationName, originalMessage: error.message },
           { cause: error }
@@ -171,18 +172,17 @@ export class ErrorSystem extends EventEmitter {
 
   /**
    * Handles an error by finding the appropriate registered handler or using the default.
-   * @param {Error} error - The error object. Must be an instance of CoreError or its subclass.
+   * @param {Error} error - The error object. Ideally an instance of CoreError or its subclass.
    * @param {object} [context={}] - Additional context about where/how the error occurred.
    */
   async handleError(error, context = {}) {
     this.recordMetric('errorsystem.errors.received', 1, { errorName: error.name, errorCode: error.code });
-
     // Ensure the error is a CoreError or subclass, or wrap it.
     let processedError = error;
     if (!(error instanceof CoreError)) {
       this.deps.logger.warn('[ErrorSystem] Received non-CoreError. Wrapping it:', { originalError: error, context });
       processedError = new CoreError(
-        ErrorCodes.CORE.UNKNOWN, //
+        ErrorCodes.CORE.UNKNOWN_ERROR, // CHANGED: Was ErrorCodes.CORE.UNKNOWN
         error.message || 'An unknown error occurred.',
         { originalErrorName: error.name, context },
         { cause: error }
@@ -233,7 +233,7 @@ export class ErrorSystem extends EventEmitter {
   /**
    * Creates an instance of a registered error type.
    * @param {string} typeName - The name of the error type (e.g., 'ValidationError').
-   * @param {string} code - The specific error code.
+   * @param {string} code - The specific, **unprefixed** error code from `ErrorCodes.DOMAIN.CODE`.
    * @param {string} message - The error message.
    * @param {object} [details={}] - Additional error details.
    * @param {object} [options={}] - Error options, including 'cause'.
@@ -242,10 +242,11 @@ export class ErrorSystem extends EventEmitter {
   createError(typeName, code, message, details = {}, options = {}) {
     const ErrorTypeClass = this.errorTypes.get(typeName) || CoreError;
     // If ErrorTypeClass is CoreError itself and typeName was different, it means the specific type wasn't found.
-    // The 'code' for specific errors usually doesn't include the prefix (e.g., just 'INVALID_INPUT' for ValidationError).
-    // The prefix is added by the subclass constructor.
+    // The 'code' for specific errors (passed to subclass constructors) should be the unprefixed part.
+    // The subclass constructor will add the prefix.
+    // If ErrorTypeClass is CoreError, the 'code' argument should be the full, prefixed code.
     if (ErrorTypeClass === CoreError && typeName !== CoreError.name) {
-        this.deps.logger.warn(`[ErrorSystem] createError: Type '${typeName}' not found, defaulting to CoreError. Code: ${code}`);
+        this.deps.logger.warn(`[ErrorSystem] createError: Type '${typeName}' not found, defaulting to CoreError. Ensure code '${code}' is fully prefixed if intended for CoreError.`);
     }
     return new ErrorTypeClass(code, message, details, options);
   }
@@ -260,7 +261,6 @@ export class ErrorSystem extends EventEmitter {
     }
     this.emit(LIFECYCLE_EVENTS.SHUTTING_DOWN, { system: 'ErrorSystem' });
     this.state.status = SYSTEM_STATUS.SHUTTING_DOWN;
-
     try {
       // Perform any cleanup for integrations if they have a shutdown method
       for (const [name, integration] of this.integrations) {
@@ -274,15 +274,13 @@ export class ErrorSystem extends EventEmitter {
 
       this.removeAllListeners(); // Clear all event listeners for this ErrorSystem instance
 
-      this.initialized = false;
+      // this.initialized = false; // This line was commented in original
       this.state.status = SYSTEM_STATUS.SHUTDOWN;
       this.recordMetric('errorsystem.shutdown.success', 1, { timestamp: Date.now() });
       // Cannot emit shutdown if all listeners are removed, log instead or emit before removeAllListeners
       this.deps.logger.info('[ErrorSystem] Shutdown complete.');
       // If you want to emit a shutdown event, do it before removeAllListeners()
       // this.emit(LIFECYCLE_EVENTS.SHUTDOWN, { system: 'ErrorSystem', timestamp: new Date().toISOString() });
-
-
     } catch (error) {
       this.state.status = SYSTEM_STATUS.ERROR;
       this.recordMetric('errorsystem.shutdown.failure', 1, { error: error.code, timestamp: Date.now() });
@@ -298,7 +296,9 @@ export class ErrorSystem extends EventEmitter {
    * @private
    */
   async _handleInternalError(error, context = {}) {
-    const internalError = !(error instanceof CoreError) ? new CoreError(ErrorCodes.CORE.INTERNAL, error.message, context, { cause: error }) : error;
+    const internalError = !(error instanceof CoreError) ?
+      new CoreError(ErrorCodes.CORE.INTERNAL_ERROR, error.message, context, { cause: error }) : // CHANGED: Was ErrorCodes.CORE.INTERNAL
+      error;
 
     this.state.errors.push({ error: internalError, timestamp: new Date().toISOString(), context });
     if (this.state.errors.length > (this.deps.config?.maxErrorHistory || DEFAULT_CONFIG.MAX_ERROR_HISTORY)) {
@@ -322,7 +322,7 @@ export class ErrorSystem extends EventEmitter {
 
   registerHealthCheck(name, checkFn) {
     if (typeof checkFn !== 'function') {
-        const err = new CoreError(ErrorCodes.CORE.INVALID_HANDLER, `Health check '${name}' must be a function.`);
+        const err = new CoreError(ErrorCodes.CORE.INVALID_HANDLER, `Health check '${name}' must be a function.`); // Using CORE prefixed code
         this._handleInternalError(err);
         throw err;
     }
@@ -339,7 +339,8 @@ export class ErrorSystem extends EventEmitter {
         results[name] = checkResult;
         if (checkResult.status !== SYSTEM_STATUS.HEALTHY) {
           // If any check is unhealthy, the system might be degraded or unhealthy
-          overallStatus = (overallStatus === SYSTEM_STATUS.HEALTHY) ? SYSTEM_STATUS.DEGRADED : SYSTEM_STATUS.UNHEALTHY;
+          overallStatus = (overallStatus === SYSTEM_STATUS.HEALTHY) ?
+          SYSTEM_STATUS.DEGRADED : SYSTEM_STATUS.UNHEALTHY;
           if (checkResult.status === SYSTEM_STATUS.UNHEALTHY) overallStatus = SYSTEM_STATUS.UNHEALTHY;
         }
       } catch (error) {

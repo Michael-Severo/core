@@ -12,16 +12,15 @@ import { CoreError } from '../CoreError.js';
 export class RouterError extends CoreError {
   /**
    * Creates a new RouterError instance.
-   * @param {string} code - A specific error code for the router system issue (e.g., 'ROUTE_NOT_FOUND', 'INVALID_ADAPTER').
+   * The constructor will prepend "ROUTER_" to the provided specific code.
+   * @param {string} code - A specific, **unprefixed** error code from `ErrorCodes.ROUTER` (e.g., 'ROUTE_NOT_FOUND', 'INVALID_ADAPTER').
    * @param {string} message - A human-readable description of the error.
    * @param {object} [details={}] - Additional details about the router system error.
    * @param {object} [options={}] - Additional error options, including 'cause'.
    */
   constructor(code, message, details = {}, options = {}) {
-    super(`ROUTER_${code}`, message, details, options); // [cite: 386]
-    this.statusCode = 500; // [cite: 386]
+    super(`ROUTER_${code}`, message, details, options); // [cite: 2090]
+    this.name = 'RouterError';
+    this.statusCode = 500; // [cite: 2090]
   }
 }
-
-// The original file also had 'export default RouterError;' which is fine if only this class is in the file.
-// For consistency with other error types, a named export is sufficient if it's part of an index.js barrel file.
