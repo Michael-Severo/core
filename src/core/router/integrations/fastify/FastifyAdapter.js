@@ -17,7 +17,7 @@ export class FastifyAdapter extends IRouterAdapter {
   /** @type {object|null} */
   internalRouter = null; // Instance of find-my-way
   /** @type {string} */
-  gatewayPrefix = '/api'; // Configurable prefix for all dynamic routes. Can be empty string for root.
+  gatewayPrefix = ''; // Configurable prefix for all dynamic routes. Can be empty string for root.
   /** @type {boolean} */
   gatewayInitialized = false;
 
