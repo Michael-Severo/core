@@ -479,3 +479,4 @@ export function createRouterSystem(deps = {}) {
     );
   }
 }
+createRouterSystem.dependencies = RouterSystem.dependencies;

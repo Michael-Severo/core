@@ -309,10 +309,11 @@ export class ContainerSystem extends EventEmitter {
    * @returns {Promise<void>}
    */
   async initialize() {
+    // Check 1: Guard against re-initialization (THIS IS LINE 313 from the error)
     if (this.state.status === SYSTEM_STATUS.RUNNING || this.state.status === SYSTEM_STATUS.INITIALIZING) {
       const err = new CoreError(ErrorCodes.CORE.ALREADY_INITIALIZED, 'ContainerSystem is already initialized or initializing.');
       await this._handleInternalError(err);
-      return;
+      return; // Exit early
     }
 
     this.emit(LIFECYCLE_EVENTS.INITIALIZING, { system: 'ContainerSystem' });
@@ -323,16 +324,30 @@ export class ContainerSystem extends EventEmitter {
     try {
       const order = this.resolveDependencyOrder();
       for (const name of order) {
-        const instance = await this.resolve(name);
-        // Initialize call during resolve handles already-initialized container state.
-        // For main init loop, ensure it's called if not already (resolve might not call it if container not RUNNING yet).
-        if (typeof instance.initialize === 'function') {
-          // Add a check to prevent double initialization if instance tracks its own state
-          // or if resolve now handles init more broadly. For now, assume initialize is safe to call if status isn't RUNNING.
-          if (!instance.state || instance.state.status !== SYSTEM_STATUS.RUNNING) { // Basic check
+        const instance = await this.resolve(name); // This resolves & caches instance
+
+        if (name === 'errorSystem' && instance && !this.deps.errorSystem) {
+          this.deps.errorSystem = instance;
+          (this.deps.logger || console).info('[ContainerSystem] Self-assigned ErrorSystem instance for internal use.');
+        }
+
+        // >>> START FIX FOR RECURSION <<<
+        // Call initialize on the component instance, but NOT if the instance is the ContainerSystem itself
+        if (instance !== this && typeof instance.initialize === 'function') {
+        // >>> END FIX FOR RECURSION <<<
+          // Prevent double initialization for already resolved & initialized singletons
+          if (!instance.state || instance.state.status !== SYSTEM_STATUS.RUNNING) { 
              await instance.initialize();
           }
         }
+      }
+
+      if (!this.deps.errorSystem && this.components.has('errorSystem')) {
+          const esInstance = await this.resolve('errorSystem'); 
+          if (esInstance && !this.deps.errorSystem) { 
+              this.deps.errorSystem = esInstance;
+              (this.deps.logger || console).info('[ContainerSystem] Late self-assigned ErrorSystem instance for internal use.');
+          }
       }
 
       this.state.status = SYSTEM_STATUS.RUNNING;
@@ -346,14 +361,15 @@ export class ContainerSystem extends EventEmitter {
       this.recordMetric('container.initialization.failure', 1, { error: error.code });
       await this._handleInternalError(error, { phase: 'initialization' });
       throw error instanceof ServiceError || error instanceof ConfigError ?
-      error : new ServiceError( // Default wrapper
-        ErrorCodes.SERVICE.OPERATION_FAILED, // Using unprefixed service code
+      error : new ServiceError(
+        ErrorCodes.SERVICE.OPERATION_FAILED,
         'ContainerSystem failed to initialize.',
         { originalMessage: error.message },
         { cause: error }
       );
     }
   }
+
 
   /**
    * Resolve dependency order for initialization using topological sort.

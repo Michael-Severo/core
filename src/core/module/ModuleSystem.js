@@ -640,3 +640,4 @@ export class ModuleSystem extends EventEmitter {
 export function createModuleSystem(deps = {}) {
  return new ModuleSystem(deps);
 }
+createModuleSystem.dependencies = ModuleSystem.dependencies;

@@ -426,3 +426,4 @@ export class ErrorSystem extends EventEmitter {
 export function createErrorSystem(deps = {}) {
   return new ErrorSystem(deps);
 }
+createErrorSystem.dependencies = ErrorSystem.dependencies;

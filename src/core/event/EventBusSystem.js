@@ -327,3 +327,4 @@ export class EventBusSystem extends EventEmitter {
 export function createEventBusSystem(deps = {}) { //
   return new EventBusSystem(deps); //
 }
+createEventBusSystem.dependencies = EventBusSystem.dependencies; 
