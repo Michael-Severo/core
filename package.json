@@ -1,9 +1,10 @@
 {
   "name": "tsmis_core",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "TSMIS Core Runtime",
-  "main": "N/A",
+  "main": "src/app.js",
   "scripts": {
+    "start": "node src/app.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -19,5 +20,8 @@
   "devDependencies": {
     "directory-tree-ascii": "^1.0.10"
   },
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "fastify": "^5.3.3"
+  }
 }
