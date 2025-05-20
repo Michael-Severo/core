@@ -11,7 +11,16 @@
     "type": "git",
     "url": "git+https://github.com/Michael-Severo/Core"
   },
-  "author": "Michael Severo",
+   "author": "michael severo",
+  "contributors": [
+    {
+      "name": "claudeAI"
+    },
+    {
+      "name": "Gemini"
+    }
+  ],
+
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/Michael-Severo/Core/issues"

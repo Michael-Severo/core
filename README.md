@@ -6,20 +6,20 @@ It provides a comprehensive set of interconnected core systems that handle commo
 
 ## Key Features
 
-* **Modular Architecture**: Build your application as a collection of independent, manageable business modules using `CoreModule` and `RoutableModule` base classes, orchestrated by `ModuleSystem`[cite: 642, 677, 2692].
+* **Modular Architecture**: Build your application as a collection of independent, manageable business modules using `CoreModule` and `RoutableModule` base classes, orchestrated by `ModuleSystem`.
 * **Standardization Pillars**: Core systems and modules adhere to consistent patterns for:
-    * State Management [cite: 624, 829]
-    * Error Handling (Centralized via `ErrorSystem` with `CoreError` and `ErrorCodes.js`) [cite: 624, 633, 715]
-    * Lifecycle Management (`initialize`, `shutdown`) [cite: 625, 848]
-    * Health Monitoring (`checkHealth`) [cite: 625, 852]
-    * Metrics Tracking (`recordMetric`) [cite: 626, 857]
-* **Dependency Injection**: Powered by `ContainerSystem` for managing component dependencies and lifecycles[cite: 349, 629, 688].
-* **Event-Driven Communication**: Decoupled inter-component communication via `EventBusSystem` and `CoreEventBus`, supporting publish/subscribe, queuing, and event history[cite: 637, 786].
+    * State Management 
+    * Error Handling (Centralized via `ErrorSystem` with `CoreError` and `ErrorCodes.js`) 
+    * Lifecycle Management (`initialize`, `shutdown`) 
+    * Health Monitoring (`checkHealth`) 
+    * Metrics Tracking (`recordMetric`) 
+* **Dependency Injection**: Powered by `ContainerSystem` for managing component dependencies and lifecycles.
+* **Event-Driven Communication**: Decoupled inter-component communication via `EventBusSystem` and `CoreEventBus`, supporting publish/subscribe, queuing, and event history.
 * **Framework-Agnostic Routing**:
-    * Define HTTP routes within `RoutableModule`s, independent of the web framework[cite: 645, 3239].
+    * Define HTTP routes within `RoutableModule`s, independent of the web framework.
     * `RouterSystem` and `CoreRouter` manage route registration and application.
-    * Pluggable adapters (e.g., `FastifyAdapter`) integrate with your chosen web framework[cite: 3142, 3277].
-    * **Dynamic Route Updates**: Supports updating routes at runtime without a full server restart, ideal for development workflows[cite: 618, 3248].
+    * Pluggable adapters (e.g., `FastifyAdapter`) integrate with your chosen web framework.
+    * **Dynamic Route Updates**: Supports updating routes at runtime without a full server restart, ideal for development workflows.
 * **Simplified Bootstrap**: `TSMISCoreRuntime` provides a high-level API to easily initialize and start your application with minimal boilerplate.
 
 ## Core Systems Overview
